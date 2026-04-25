@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Web Linux Console</title>
+
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@xterm/xterm/css/xterm.css"
+    />
+
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #111;
+      }
+
+      #toolbar {
+        height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        background: #222;
+        color: #fff;
+        font-family: sans-serif;
+      }
+
+      #filePath {
+        width: 420px;
+        max-width: 70vw;
+        padding: 4px 8px;
+      }
+
+      #terminal {
+        width: 100%;
+        height: calc(100% - 40px);
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="toolbar">
+      <span>文件下载：</span>
+      <input id="filePath" placeholder="/var/log/syslog" />
+      <button type="button" onclick="downloadFile()">下载</button>
+    </div>
+
+    <div id="terminal"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit/lib/addon-fit.js"></script>
+
+    <script>
+      const terminal = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: "monospace",
+        scrollback: 5000,
+        convertEol: true,
+        theme: {
+          background: "#111111"
+        }
+      });
+
+      const fitAddon = new FitAddon.FitAddon();
+      terminal.loadAddon(fitAddon);
+
+      terminal.open(document.getElementById("terminal"));
+      fitAddon.fit();
+      terminal.focus();
+
+      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(`${protocol}//${location.host}/ws/terminal`);
+
+      socket.onopen = () => {
+        terminal.writeln("Connected to Linux server\r\n");
+
+        const dims = fitAddon.proposeDimensions();
+        if (dims) {
+          socket.send(
+            JSON.stringify({
+              type: "resize",
+              cols: dims.cols,
+              rows: dims.rows
+            })
+          );
+        }
+      };
+
+      socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === "output") {
+          terminal.write(msg.data);
+        }
+      };
+
+      socket.onclose = () => {
+        terminal.writeln("\r\nConnection closed");
+      };
+
+      terminal.onData((data) => {
+        socket.send(
+          JSON.stringify({
+            type: "input",
+            data
+          })
+        );
+      });
+
+      window.addEventListener("resize", () => {
+        fitAddon.fit();
+
+        const dims = fitAddon.proposeDimensions();
+        if (dims && socket.readyState === WebSocket.OPEN) {
+          socket.send(
+            JSON.stringify({
+              type: "resize",
+              cols: dims.cols,
+              rows: dims.rows
+            })
+          );
+        }
+      });
+
+      function downloadFile() {
+        const filePath = document.getElementById("filePath").value.trim();
+
+        if (!filePath) {
+          alert("请输入文件路径");
+          return;
+        }
+
+        window.open(`/download?path=${encodeURIComponent(filePath)}`, "_blank");
+      }
+    </script>
+  </body>
+</html>
