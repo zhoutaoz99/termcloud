@@ -93,6 +93,32 @@ Environment=PORT=3000
 WantedBy=multi-user.target
 ```
 
+## 常见问题
+
+### `posix_spawnp failed`（node-pty 启动报错）
+
+**现象**：浏览器打开终端时服务端报错 `Error: posix_spawnp failed`。
+
+**原因**：`node-pty` 的预编译二进制文件与当前 Node.js 版本不兼容（常见于升级 Node 后或使用较新版本如 v25+）。
+
+**解决**：从源码重新编译 node-pty：
+
+```bash
+cd node_modules/node-pty && npx node-gyp rebuild && cd ../..
+```
+
+### `EADDRINUSE: address already in use`
+
+**现象**：启动时报错 `Error: listen EADDRINUSE: address already in use 0.0.0.0:3000`。
+
+**原因**：端口 3000 被之前的进程占用。
+
+**解决**：
+
+```bash
+lsof -ti:3000 | xargs kill -9
+```
+
 ## 注意
 
 本项目是最小原型，不包含认证、权限控制、审计、多租户隔离、访问白名单等安全能力，不建议直接暴露公网长期使用。
