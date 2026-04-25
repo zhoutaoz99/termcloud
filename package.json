@@ -1,0 +1,23 @@
+{
+  "name": "web-linux-console",
+  "version": "1.0.0",
+  "description": "Minimal web-based Linux console with xterm.js + node-pty",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node scripts/validate.mjs"
+  },
+  "keywords": [
+    "terminal",
+    "xterm",
+    "node-pty",
+    "websocket",
+    "linux"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.3"
+  }
+}
