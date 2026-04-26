@@ -14,6 +14,47 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.static(path.join(__dirname, "public")));
 
+app.get("/api/files", (req, res) => {
+  let dir = req.query.dir || os.homedir();
+
+  // Resolve and safety-check the path
+  dir = path.resolve(dir);
+
+  if (!fs.existsSync(dir)) {
+    return res.status(404).json({ error: "directory not found" });
+  }
+
+  const stat = fs.statSync(dir);
+  if (!stat.isDirectory()) {
+    return res.status(400).json({ error: "not a directory" });
+  }
+
+  try {
+    const entries = fs
+      .readdirSync(dir)
+      .filter((name) => !name.startsWith("."))
+      .map((name) => {
+        const fullPath = path.join(dir, name);
+        try {
+          const s = fs.statSync(fullPath);
+          return {
+            name,
+            isFile: s.isFile(),
+            isDirectory: s.isDirectory(),
+            size: s.isFile() ? s.size : null
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    res.json({ dir, entries });
+  } catch (err) {
+    res.status(403).json({ error: "permission denied" });
+  }
+});
+
 app.get("/download", (req, res) => {
   const filePath = req.query.path;
 
