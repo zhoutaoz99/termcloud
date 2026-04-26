@@ -22,6 +22,87 @@
         overflow: hidden;
       }
 
+      /* ── login overlay ── */
+      #login-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: #111;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+      }
+
+      #login-box {
+        background: #1a1a2e;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 36px 32px;
+        width: 340px;
+        box-sizing: border-box;
+      }
+
+      #login-box h2 {
+        margin: 0 0 24px;
+        color: #ddd;
+        font-size: 20px;
+        text-align: center;
+        font-weight: 500;
+      }
+
+      #login-box label {
+        display: block;
+        color: #aaa;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+
+      #login-box input[type="text"],
+      #login-box input[type="password"] {
+        width: 100%;
+        padding: 10px 12px;
+        margin-bottom: 16px;
+        border: 1px solid #333;
+        border-radius: 4px;
+        background: #0e0e1a;
+        color: #ddd;
+        font-size: 14px;
+        box-sizing: border-box;
+        outline: none;
+      }
+
+      #login-box input[type="text"]:focus,
+      #login-box input[type="password"]:focus {
+        border-color: #0f3460;
+      }
+
+      #login-box button[type="submit"] {
+        width: 100%;
+        padding: 10px;
+        background: #0f3460;
+        border: none;
+        border-radius: 4px;
+        color: #ddd;
+        font-size: 14px;
+        cursor: pointer;
+        margin-top: 4px;
+      }
+
+      #login-box button[type="submit"]:hover {
+        background: #1a4a8a;
+      }
+
+      #login-error {
+        color: #e74c3c;
+        font-size: 13px;
+        text-align: center;
+        margin-top: 12px;
+        min-height: 18px;
+      }
+
       #app-container {
         display: flex;
         width: 100%;
@@ -215,6 +296,18 @@
       #terminal {
         width: 100%;
         height: 100%;
+        font-variant-ligatures: none;
+        font-feature-settings:
+          "liga" 0,
+          "calt" 0;
+      }
+
+      #terminal .xterm,
+      #terminal .xterm-rows {
+        font-variant-ligatures: none;
+        font-feature-settings:
+          "liga" 0,
+          "calt" 0;
       }
 
       /* loading state */
@@ -228,7 +321,21 @@
   </head>
 
   <body>
-    <div id="app-container">
+    <div id="login-overlay">
+      <div id="login-box">
+        <h2>Web Linux Console</h2>
+        <form id="login-form" onsubmit="handleLogin(event)">
+          <label for="login-username">用户名</label>
+          <input type="text" id="login-username" autocomplete="username" required />
+          <label for="login-password">密码</label>
+          <input type="password" id="login-password" autocomplete="current-password" required />
+          <button type="submit">登 录</button>
+        </form>
+        <div id="login-error"></div>
+      </div>
+    </div>
+
+    <div id="app-container" style="display:none">
       <div id="sidebar">
         <div id="sidebar-header">
           <span class="path-text" id="current-path">/</span>
@@ -251,13 +358,99 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit/lib/addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
 
     <script>
+      // ── auth helpers ──
+      function getToken() {
+        return localStorage.getItem("token");
+      }
+
+      function setToken(token) {
+        localStorage.setItem("token", token);
+      }
+
+      function clearToken() {
+        localStorage.removeItem("token");
+      }
+
+      function showLogin() {
+        document.getElementById("login-overlay").style.display = "flex";
+        document.getElementById("app-container").style.display = "none";
+      }
+
+      function showApp() {
+        document.getElementById("login-overlay").style.display = "none";
+        document.getElementById("app-container").style.display = "flex";
+        initTerminal();
+        loadFiles("");
+      }
+
+      function handleLogin(event) {
+        event.preventDefault();
+        const username = document.getElementById("login-username").value;
+        const password = document.getElementById("login-password").value;
+        const errorEl = document.getElementById("login-error");
+        errorEl.textContent = "";
+
+        fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password })
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.token) {
+              setToken(data.token);
+              showApp();
+            } else {
+              errorEl.textContent = data.error || "登录失败";
+            }
+          })
+          .catch(() => {
+            errorEl.textContent = "网络错误";
+          });
+      }
+
+      function fetchWithAuth(url, options) {
+        const token = getToken();
+        const headers = Object.assign({}, options && options.headers, {
+          Authorization: "Bearer " + token
+        });
+        return fetch(url, Object.assign({}, options, { headers })).then((r) => {
+          if (r.status === 401) {
+            clearToken();
+            showLogin();
+            throw new Error("unauthorized");
+          }
+          return r;
+        });
+      }
+
       // ── terminal setup ──
+      let terminalInitialized = false;
+      let socket = null;
+      const terminalFontFamily = [
+        "ui-monospace",
+        '"SFMono-Regular"',
+        "Menlo",
+        "Monaco",
+        "Consolas",
+        '"Liberation Mono"',
+        '"Sarasa Mono SC"',
+        '"Noto Sans Mono CJK SC"',
+        '"Source Han Mono SC"',
+        '"Microsoft YaHei Mono"',
+        "monospace"
+      ].join(", ");
+
       const terminal = new Terminal({
         cursorBlink: true,
         fontSize: 14,
-        fontFamily: "monospace",
+        fontFamily: terminalFontFamily,
+        letterSpacing: 0,
+        lineHeight: 1.2,
+        rescaleOverlappingGlyphs: true,
         scrollback: 5000,
         theme: {
           background: "#111111"
@@ -266,212 +459,236 @@
 
       const fitAddon = new FitAddon.FitAddon();
       terminal.loadAddon(fitAddon);
+      if (window.Unicode11Addon) {
+        terminal.loadAddon(new Unicode11Addon.Unicode11Addon());
+        terminal.unicode.activeVersion = "11";
+      }
 
-      terminal.open(document.getElementById("terminal"));
-      fitAddon.fit();
-      terminal.focus();
+      function initTerminal() {
+        if (terminalInitialized) return;
+        terminalInitialized = true;
 
-      const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-      const socket = new WebSocket(`${protocol}//${location.host}/ws/terminal`);
+        terminal.open(document.getElementById("terminal"));
+        fitAddon.fit();
+        terminal.focus();
+        refitTerminalAfterFontsLoad();
 
-      socket.onopen = () => {
-        terminal.writeln("Connected to Linux server\r\n");
-
-        const dims = fitAddon.proposeDimensions();
-        if (dims) {
-          socket.send(
-            JSON.stringify({
-              type: "resize",
-              cols: dims.cols,
-              rows: dims.rows
-            })
-          );
-        }
-      };
-
-      let pendingAnsiFragment = "";
-      let pendingCursorHome = "";
-      let justPreservedClear = false;
-
-      socket.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-
-        if (msg.type === "output") {
-          const data = preserveClearScreenOutput(msg.data);
-          if (data) {
-            terminal.write(data);
-          }
-        }
-      };
-
-      socket.onclose = () => {
-        terminal.writeln("\r\nConnection closed");
-      };
-
-      terminal.onData((data) => {
-        socket.send(
-          JSON.stringify({
-            type: "input",
-            data
-          })
+        const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        const token = getToken();
+        socket = new WebSocket(
+          `${protocol}//${location.host}/ws/terminal?token=${token}`
         );
-      });
 
-      function preserveClearScreenOutput(data) {
-        const input = pendingAnsiFragment + data;
-        pendingAnsiFragment = "";
+        socket.onopen = () => {
+          terminal.writeln("Connected to Linux server\r\n");
 
-        const output = [];
-        let index = 0;
-
-        function flushPendingCursorHome() {
-          if (pendingCursorHome) {
-            output.push(pendingCursorHome);
-            pendingCursorHome = "";
+          const dims = fitAddon.proposeDimensions();
+          if (dims) {
+            socket.send(
+              JSON.stringify({
+                type: "resize",
+                cols: dims.cols,
+                rows: dims.rows
+              })
+            );
           }
-        }
-
-        function appendText(text) {
-          if (!text) {
-            return;
-          }
-          flushPendingCursorHome();
-          justPreservedClear = false;
-          output.push(text);
-        }
-
-        function appendClearBoundary() {
-          output.push("\r\n");
-        }
-
-        while (index < input.length) {
-          const escapeIndex = input.indexOf("\x1b", index);
-
-          if (escapeIndex === -1) {
-            appendText(input.slice(index));
-            break;
-          }
-
-          appendText(input.slice(index, escapeIndex));
-
-          const sequence = readAnsiSequence(input, escapeIndex);
-          if (!sequence) {
-            pendingAnsiFragment = input.slice(escapeIndex);
-            break;
-          }
-
-          if (isCursorHome(sequence)) {
-            if (!justPreservedClear) {
-              flushPendingCursorHome();
-              pendingCursorHome = sequence;
-            }
-          } else if (isFullScreenClear(sequence)) {
-            pendingCursorHome = "";
-            if (!justPreservedClear) {
-              appendClearBoundary();
-              justPreservedClear = true;
-            }
-          } else if (isScrollbackClear(sequence)) {
-            pendingCursorHome = "";
-          } else {
-            flushPendingCursorHome();
-            output.push(sequence);
-          }
-
-          index = escapeIndex + sequence.length;
-        }
-
-        return output.join("");
-      }
-
-      function readAnsiSequence(input, index) {
-        if (index + 1 >= input.length) {
-          return null;
-        }
-
-        const type = input[index + 1];
-
-        if (type === "[") {
-          for (let i = index + 2; i < input.length; i += 1) {
-            const code = input.charCodeAt(i);
-            if (code >= 0x40 && code <= 0x7e) {
-              return input.slice(index, i + 1);
-            }
-          }
-          return null;
-        }
-
-        if (type === "]") {
-          for (let i = index + 2; i < input.length; i += 1) {
-            if (input.charCodeAt(i) === 0x07) {
-              return input.slice(index, i + 1);
-            }
-            if (input[i] === "\x1b" && input[i + 1] === "\\") {
-              return input.slice(index, i + 2);
-            }
-          }
-          return null;
-        }
-
-        if (type === "P" || type === "^" || type === "_") {
-          for (let i = index + 2; i < input.length; i += 1) {
-            if (input[i] === "\x1b" && input[i + 1] === "\\") {
-              return input.slice(index, i + 2);
-            }
-          }
-          return null;
-        }
-
-        for (let i = index + 1; i < input.length; i += 1) {
-          const code = input.charCodeAt(i);
-          if (code >= 0x30 && code <= 0x7e) {
-            return input.slice(index, i + 1);
-          }
-          if (code < 0x20 || code > 0x2f) {
-            return input.slice(index, i + 1);
-          }
-        }
-
-        return null;
-      }
-
-      function getCsi(sequence) {
-        if (!sequence.startsWith("\x1b[")) {
-          return null;
-        }
-
-        return {
-          final: sequence[sequence.length - 1],
-          params: sequence.slice(2, -1)
         };
-      }
 
-      function isCursorHome(sequence) {
-        const csi = getCsi(sequence);
-        if (!csi || (csi.final !== "H" && csi.final !== "f")) {
-          return false;
+        let pendingAnsiFragment = "";
+        let pendingCursorHome = "";
+        let justPreservedClear = false;
+
+        socket.onmessage = (event) => {
+          const msg = JSON.parse(event.data);
+
+          if (msg.type === "output") {
+            const data = preserveClearScreenOutput(msg.data);
+            if (data) {
+              terminal.write(data);
+            }
+          }
+        };
+
+        socket.onclose = (event) => {
+          if (event.code === 4001 || event.code === 4003) {
+            clearToken();
+            showLogin();
+          } else {
+            terminal.writeln("\r\nConnection closed");
+          }
+        };
+
+        socket.onerror = () => {
+          terminal.writeln("\r\nConnection error");
+        };
+
+        terminal.onData((data) => {
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(
+              JSON.stringify({
+                type: "input",
+                data
+              })
+            );
+          }
+        });
+
+        function preserveClearScreenOutput(data) {
+          const input = pendingAnsiFragment + data;
+          pendingAnsiFragment = "";
+
+          const output = [];
+          let index = 0;
+
+          function flushPendingCursorHome() {
+            if (pendingCursorHome) {
+              output.push(pendingCursorHome);
+              pendingCursorHome = "";
+            }
+          }
+
+          function appendText(text) {
+            if (!text) {
+              return;
+            }
+            flushPendingCursorHome();
+            justPreservedClear = false;
+            output.push(text);
+          }
+
+          function appendClearBoundary() {
+            output.push("\r\n");
+          }
+
+          while (index < input.length) {
+            const escapeIndex = input.indexOf("\x1b", index);
+
+            if (escapeIndex === -1) {
+              appendText(input.slice(index));
+              break;
+            }
+
+            appendText(input.slice(index, escapeIndex));
+
+            const sequence = readAnsiSequence(input, escapeIndex);
+            if (!sequence) {
+              pendingAnsiFragment = input.slice(escapeIndex);
+              break;
+            }
+
+            if (isCursorHome(sequence)) {
+              if (!justPreservedClear) {
+                flushPendingCursorHome();
+                pendingCursorHome = sequence;
+              }
+            } else if (isFullScreenClear(sequence)) {
+              pendingCursorHome = "";
+              if (!justPreservedClear) {
+                appendClearBoundary();
+                justPreservedClear = true;
+              }
+            } else if (isScrollbackClear(sequence)) {
+              pendingCursorHome = "";
+            } else {
+              flushPendingCursorHome();
+              output.push(sequence);
+            }
+
+            index = escapeIndex + sequence.length;
+          }
+
+          return output.join("");
         }
 
-        const parts = csi.params.split(";");
-        const row = parts[0] || "1";
-        const col = parts[1] || "1";
-        return (parts.length === 1 || parts.length === 2) && row === "1" && col === "1";
-      }
+        function readAnsiSequence(input, index) {
+          if (index + 1 >= input.length) {
+            return null;
+          }
 
-      function isFullScreenClear(sequence) {
-        const csi = getCsi(sequence);
-        return csi?.final === "J" && csi.params === "2";
-      }
+          const type = input[index + 1];
 
-      function isScrollbackClear(sequence) {
-        const csi = getCsi(sequence);
-        return csi?.final === "J" && csi.params === "3";
+          if (type === "[") {
+            for (let i = index + 2; i < input.length; i += 1) {
+              const code = input.charCodeAt(i);
+              if (code >= 0x40 && code <= 0x7e) {
+                return input.slice(index, i + 1);
+              }
+            }
+            return null;
+          }
+
+          if (type === "]") {
+            for (let i = index + 2; i < input.length; i += 1) {
+              if (input.charCodeAt(i) === 0x07) {
+                return input.slice(index, i + 1);
+              }
+              if (input[i] === "\x1b" && input[i + 1] === "\\") {
+                return input.slice(index, i + 2);
+              }
+            }
+            return null;
+          }
+
+          if (type === "P" || type === "^" || type === "_") {
+            for (let i = index + 2; i < input.length; i += 1) {
+              if (input[i] === "\x1b" && input[i + 1] === "\\") {
+                return input.slice(index, i + 2);
+              }
+            }
+            return null;
+          }
+
+          for (let i = index + 1; i < input.length; i += 1) {
+            const code = input.charCodeAt(i);
+            if (code >= 0x30 && code <= 0x7e) {
+              return input.slice(index, i + 1);
+            }
+            if (code < 0x20 || code > 0x2f) {
+              return input.slice(index, i + 1);
+            }
+          }
+
+          return null;
+        }
+
+        function getCsi(sequence) {
+          if (!sequence.startsWith("\x1b[")) {
+            return null;
+          }
+
+          return {
+            final: sequence[sequence.length - 1],
+            params: sequence.slice(2, -1)
+          };
+        }
+
+        function isCursorHome(sequence) {
+          const csi = getCsi(sequence);
+          if (!csi || (csi.final !== "H" && csi.final !== "f")) {
+            return false;
+          }
+
+          const parts = csi.params.split(";");
+          const row = parts[0] || "1";
+          const col = parts[1] || "1";
+          return (parts.length === 1 || parts.length === 2) && row === "1" && col === "1";
+        }
+
+        function isFullScreenClear(sequence) {
+          const csi = getCsi(sequence);
+          return csi?.final === "J" && csi.params === "2";
+        }
+
+        function isScrollbackClear(sequence) {
+          const csi = getCsi(sequence);
+          return csi?.final === "J" && csi.params === "3";
+        }
       }
 
       function fitTerminal() {
         fitAddon.fit();
         const dims = fitAddon.proposeDimensions();
-        if (dims && socket.readyState === WebSocket.OPEN) {
+        if (dims && socket && socket.readyState === WebSocket.OPEN) {
           socket.send(
             JSON.stringify({
               type: "resize",
@@ -480,6 +697,19 @@
             })
           );
         }
+      }
+
+      function refitTerminalAfterFontsLoad() {
+        if (!document.fonts || !document.fonts.ready) {
+          return;
+        }
+
+        document.fonts.ready
+          .then(() => {
+            fitTerminal();
+            terminal.refresh(0, terminal.rows - 1);
+          })
+          .catch(() => {});
       }
 
       window.addEventListener("resize", fitTerminal);
@@ -499,7 +729,7 @@
         const listEl = document.getElementById("file-list");
         listEl.innerHTML = '<div class="file-list-loading">加载中...</div>';
 
-        fetch(`/api/files?dir=${encodeURIComponent(dir)}`)
+        fetchWithAuth(`/api/files?dir=${encodeURIComponent(dir)}`)
           .then((r) => r.json())
           .then((data) => {
             currentDir = data.dir;
@@ -554,7 +784,21 @@
       }
 
       function downloadItem(fullPath) {
-        window.open(`/download?path=${encodeURIComponent(fullPath)}`, "_blank");
+        fetchWithAuth(`/download?path=${encodeURIComponent(fullPath)}`)
+          .then((r) => r.blob())
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = fullPath.split("/").pop();
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          })
+          .catch(() => {
+            alert("下载失败");
+          });
       }
 
       function downloadFile() {
@@ -563,7 +807,21 @@
           alert("请输入文件路径");
           return;
         }
-        window.open(`/download?path=${encodeURIComponent(filePath)}`, "_blank");
+        fetchWithAuth(`/download?path=${encodeURIComponent(filePath)}`)
+          .then((r) => r.blob())
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filePath.split("/").pop();
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          })
+          .catch(() => {
+            alert("下载失败");
+          });
       }
 
       function pathDir(fullPath) {
@@ -583,8 +841,17 @@
         return str.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
       }
 
-      // initial load
-      loadFiles("");
+      // ── startup: check existing token ──
+      (function () {
+        const token = getToken();
+        if (token) {
+          fetchWithAuth("/api/files?dir=")
+            .then(() => showApp())
+            .catch(() => showLogin());
+        } else {
+          showLogin();
+        }
+      })();
     </script>
   </body>
 </html>
