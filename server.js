@@ -28,7 +28,19 @@ if (typeof config.username !== "string" || typeof config.password !== "string") 
   process.exit(1);
 }
 
-const JWT_SECRET = crypto.randomBytes(32).toString("hex");
+const USER_WORK_DIR = path.join(os.homedir(), config.username);
+if (!fs.existsSync(USER_WORK_DIR)) {
+  fs.mkdirSync(USER_WORK_DIR, { recursive: true });
+}
+
+const JWT_SECRET_PATH = path.join(__dirname, ".jwt_secret");
+let JWT_SECRET;
+if (fs.existsSync(JWT_SECRET_PATH)) {
+  JWT_SECRET = fs.readFileSync(JWT_SECRET_PATH, "utf8").trim();
+} else {
+  JWT_SECRET = crypto.randomBytes(32).toString("hex");
+  fs.writeFileSync(JWT_SECRET_PATH, JWT_SECRET);
+}
 
 function isUtf8Locale(value) {
   return typeof value === "string" && /utf-?8/i.test(value);
@@ -101,7 +113,7 @@ app.post("/api/login", (req, res) => {
 
 // ── protected API routes ──
 app.get("/api/files", requireAuth, (req, res) => {
-  let dir = req.query.dir || os.homedir();
+  let dir = req.query.dir || USER_WORK_DIR;
 
   // Resolve and safety-check the path
   dir = path.resolve(dir);
@@ -208,7 +220,7 @@ wss.on("connection", (ws) => {
     name: "xterm-256color",
     cols: 100,
     rows: 30,
-    cwd: process.env.HOME || os.homedir(),
+    cwd: USER_WORK_DIR,
     env: createTerminalEnv()
   });
 
@@ -223,9 +235,13 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("message", (message) => {
-    let msg;
+  let exited = false;
+  ptyProcess.onExit(() => { exited = true; });
 
+  ws.on("message", (message) => {
+    if (exited) return;
+
+    let msg;
     try {
       msg = JSON.parse(message.toString());
     } catch (err) {
@@ -237,7 +253,11 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.type === "resize") {
-      ptyProcess.resize(msg.cols, msg.rows);
+      try {
+        ptyProcess.resize(msg.cols, msg.rows);
+      } catch (err) {
+        // fd may have closed between messages
+      }
     }
   });
 
