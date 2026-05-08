@@ -30,6 +30,7 @@ assert(html.includes('rescaleOverlappingGlyphs: true'), 'index.html must prevent
 assert(html.includes('font-family: "TermMono"'), 'index.html must declare the TermMono unicode-range @font-face family');
 assert(html.includes('unicode-range: U+2E80-9FFF'), 'index.html must scope CJK glyphs to the CJK @font-face via unicode-range');
 assert(html.includes('/fonts/sarasa-fixed-sc-regular.woff2'), 'index.html must reference the self-hosted Sarasa Fixed SC woff2');
+assert(html.includes('allowProposedApi: true'), 'index.html must set allowProposedApi: true for xterm Unicode11 addon');
 
 const fontPath = path.join(rootDir, 'public', 'fonts', 'sarasa-fixed-sc-regular.woff2');
 assert(fs.existsSync(fontPath), 'public/fonts/sarasa-fixed-sc-regular.woff2 must exist (run scripts/build-fonts.py to regenerate)');
