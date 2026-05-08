@@ -244,12 +244,29 @@
         transition: opacity 0.15s;
       }
 
-      .file-item:hover .download-btn {
+      .file-item .delete-btn {
+        flex-shrink: 0;
+        background: none;
+        border: none;
+        color: #e05555;
+        cursor: pointer;
+        font-size: 15px;
+        padding: 0 2px;
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+
+      .file-item:hover .download-btn,
+      .file-item:hover .delete-btn {
         opacity: 1;
       }
 
       .file-item .download-btn:hover {
         color: #7ec8e3;
+      }
+
+      .file-item .delete-btn:hover {
+        color: #ff6b6b;
       }
 
       /* manual path input at bottom of sidebar */
@@ -368,6 +385,7 @@
       <div id="sidebar">
         <div id="sidebar-header">
           <span class="path-text" id="current-path">/</span>
+          <button onclick="refreshFiles()" title="刷新文件列表">🔄</button>
           <button onclick="toggleSidebar()" title="隐藏侧栏">◀</button>
         </div>
         <div id="file-list">
@@ -524,6 +542,7 @@
             if (data) {
               terminal.write(data);
             }
+            scheduleAutoRefresh();
           }
         };
 
@@ -792,6 +811,7 @@
                 html += `<div class="file-item" onclick="navigateTo('${escapeJs(pathDir(fullPath))}')">
                   <span class="icon">📄</span>
                   <span class="name">${escapeHtml(entry.name)}</span>
+                  <button class="delete-btn" onclick="event.stopPropagation(); deleteItem('${escapeJs(fullPath)}')" title="删除">✕</button>
                   <button class="download-btn" onclick="event.stopPropagation(); downloadItem('${escapeJs(fullPath)}')" title="下载">⬇</button>
                 </div>`;
               }
@@ -809,6 +829,21 @@
         loadFiles(dir);
       }
 
+      function refreshFiles() {
+        loadFiles(currentDir);
+      }
+
+      let refreshDebounce = null;
+      function scheduleAutoRefresh() {
+        if (refreshDebounce) clearTimeout(refreshDebounce);
+        refreshDebounce = setTimeout(() => {
+          const sidebar = document.getElementById("sidebar");
+          if (!sidebar.classList.contains("hidden")) {
+            loadFiles(currentDir);
+          }
+        }, 1000);
+      }
+
       function downloadItem(fullPath) {
         fetchWithAuth(`/download?path=${encodeURIComponent(fullPath)}`)
           .then((r) => r.blob())
@@ -824,6 +859,19 @@
           })
           .catch(() => {
             alert("下载失败");
+          });
+      }
+
+      function deleteItem(fullPath) {
+        const name = fullPath.split("/").pop();
+        if (!confirm(`确定删除 ${name} 吗？`)) return;
+        fetchWithAuth(`/api/files?path=${encodeURIComponent(fullPath)}`, { method: "DELETE" })
+          .then((r) => {
+            if (!r.ok) return r.json().then((e) => { throw new Error(e.error); });
+            loadFiles(currentDir);
+          })
+          .catch((err) => {
+            alert("删除失败: " + err.message);
           });
       }
 

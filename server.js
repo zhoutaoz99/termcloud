@@ -141,6 +141,27 @@ app.get("/api/files", requireAuth, (req, res) => {
   }
 });
 
+app.delete("/api/files", requireAuth, (req, res) => {
+  const filePath = req.query.path;
+
+  if (!filePath) {
+    return res.status(400).json({ error: "missing path" });
+  }
+
+  const resolved = path.resolve(filePath);
+
+  if (!fs.existsSync(resolved)) {
+    return res.status(404).json({ error: "file not found" });
+  }
+
+  try {
+    fs.rmSync(resolved, { recursive: true });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/download", requireAuth, (req, res) => {
   const filePath = req.query.path;
 
