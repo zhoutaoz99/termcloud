@@ -1,7 +1,6 @@
 const express = require("express");
 const fs = require("fs");
 const http = require("http");
-const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const WebSocket = require("ws");
@@ -28,9 +27,27 @@ if (typeof config.username !== "string" || typeof config.password !== "string") 
   process.exit(1);
 }
 
-const USER_WORK_DIR = path.join(os.homedir(), config.username);
-if (!fs.existsSync(USER_WORK_DIR)) {
-  fs.mkdirSync(USER_WORK_DIR, { recursive: true });
+const USER_WORK_DIR = (() => {
+  const preferred = path.join("/data/users", config.username);
+  try {
+    if (!fs.existsSync(preferred)) {
+      fs.mkdirSync(preferred, { recursive: true });
+    }
+    return preferred;
+  } catch {
+    // /data not writable (e.g. macOS read-only root), fallback to home dir
+    const fallback = path.join(require("os").homedir(), ".termcloud-data", "users", config.username);
+    if (!fs.existsSync(fallback)) {
+      fs.mkdirSync(fallback, { recursive: true });
+    }
+    console.warn(`Cannot create ${preferred}, using fallback: ${fallback}`);
+    return fallback;
+  }
+})();
+
+function isPathWithinUserDir(resolvedPath) {
+  const normalized = path.resolve(resolvedPath);
+  return normalized === USER_WORK_DIR || normalized.startsWith(USER_WORK_DIR + path.sep);
 }
 
 const JWT_SECRET_PATH = path.join(__dirname, ".jwt_secret");
@@ -118,6 +135,10 @@ app.get("/api/files", requireAuth, (req, res) => {
   // Resolve and safety-check the path
   dir = path.resolve(dir);
 
+  if (!isPathWithinUserDir(dir)) {
+    return res.status(403).json({ error: "access denied: path outside work directory" });
+  }
+
   if (!fs.existsSync(dir)) {
     return res.status(404).json({ error: "directory not found" });
   }
@@ -147,7 +168,7 @@ app.get("/api/files", requireAuth, (req, res) => {
       })
       .filter(Boolean);
 
-    res.json({ dir, entries });
+    res.json({ dir, entries, workDir: USER_WORK_DIR });
   } catch (err) {
     res.status(403).json({ error: "permission denied" });
   }
@@ -161,6 +182,10 @@ app.delete("/api/files", requireAuth, (req, res) => {
   }
 
   const resolved = path.resolve(filePath);
+
+  if (!isPathWithinUserDir(resolved)) {
+    return res.status(403).json({ error: "access denied: path outside work directory" });
+  }
 
   if (!fs.existsSync(resolved)) {
     return res.status(404).json({ error: "file not found" });
@@ -181,18 +206,76 @@ app.get("/download", requireAuth, (req, res) => {
     return res.status(400).send("missing path");
   }
 
-  if (!fs.existsSync(filePath)) {
+  const resolved = path.resolve(filePath);
+
+  if (!isPathWithinUserDir(resolved)) {
+    return res.status(403).send("access denied: path outside work directory");
+  }
+
+  if (!fs.existsSync(resolved)) {
     return res.status(404).send("file not found");
   }
 
-  const stat = fs.statSync(filePath);
+  const stat = fs.statSync(resolved);
 
   if (!stat.isFile()) {
     return res.status(400).send("not a file");
   }
 
-  return res.download(filePath);
+  return res.download(resolved);
 });
+
+// ── terminal session management ──
+const sessions = new Map();
+
+function getOrCreateSession(username) {
+  const existing = sessions.get(username);
+  if (existing && !existing.exited) return existing;
+
+  const shell = process.env.SHELL || "/bin/bash";
+  const ptyProcess = pty.spawn(shell, [], {
+    name: "xterm-256color",
+    cols: 100,
+    rows: 30,
+    cwd: USER_WORK_DIR,
+    env: createTerminalEnv()
+  });
+
+  const session = {
+    pty: ptyProcess,
+    buffer: [],
+    bufferSize: 0,
+    clients: new Set(),
+    exited: false
+  };
+
+  ptyProcess.onData((data) => {
+    session.buffer.push(data);
+    session.bufferSize += data.length;
+    while (session.bufferSize > 1048576 && session.buffer.length > 1) {
+      session.bufferSize -= session.buffer.shift().length;
+    }
+
+    for (const ws of session.clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "output", data }));
+      }
+    }
+  });
+
+  ptyProcess.onExit(() => {
+    session.exited = true;
+    sessions.delete(username);
+    for (const ws of session.clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.close(4001, "process exited");
+      }
+    }
+  });
+
+  sessions.set(username, session);
+  return session;
+}
 
 // ── WebSocket with auth ──
 const wss = new WebSocket.Server({
@@ -205,7 +288,8 @@ const wss = new WebSocket.Server({
       return callback(false, 401, "Unauthorized");
     }
     try {
-      jwt.verify(token, JWT_SECRET);
+      const decoded = jwt.verify(token, JWT_SECRET);
+      info.req.user = decoded;
       callback(true);
     } catch (err) {
       callback(false, 401, "Unauthorized");
@@ -213,33 +297,21 @@ const wss = new WebSocket.Server({
   }
 });
 
-wss.on("connection", (ws) => {
-  const shell = process.env.SHELL || "/bin/bash";
+wss.on("connection", (ws, req) => {
+  const username = req.user.username;
+  const session = getOrCreateSession(username);
 
-  const ptyProcess = pty.spawn(shell, [], {
-    name: "xterm-256color",
-    cols: 100,
-    rows: 30,
-    cwd: USER_WORK_DIR,
-    env: createTerminalEnv()
-  });
+  session.clients.add(ws);
 
-  ptyProcess.onData((data) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(
-        JSON.stringify({
-          type: "output",
-          data
-        })
-      );
-    }
-  });
+  const isResuming = session.buffer.length > 0;
+  ws.send(JSON.stringify({ type: "connected", resuming: isResuming }));
 
-  let exited = false;
-  ptyProcess.onExit(() => { exited = true; });
+  if (session.buffer.length > 0) {
+    ws.send(JSON.stringify({ type: "output", data: session.buffer.join("") }));
+  }
 
   ws.on("message", (message) => {
-    if (exited) return;
+    if (session.exited) return;
 
     let msg;
     try {
@@ -249,28 +321,25 @@ wss.on("connection", (ws) => {
     }
 
     if (msg.type === "input") {
-      ptyProcess.write(msg.data);
+      session.pty.write(msg.data);
     }
 
     if (msg.type === "resize") {
       try {
-        ptyProcess.resize(msg.cols, msg.rows);
+        session.pty.resize(msg.cols, msg.rows);
       } catch (err) {
         // fd may have closed between messages
       }
     }
   });
 
-  const terminate = () => {
-    try {
-      ptyProcess.kill();
-    } catch (err) {
-      // ignore
-    }
-  };
+  ws.on("close", () => {
+    session.clients.delete(ws);
+  });
 
-  ws.on("close", terminate);
-  ws.on("error", terminate);
+  ws.on("error", () => {
+    session.clients.delete(ws);
+  });
 });
 
 server.listen(PORT, "0.0.0.0", () => {

@@ -269,42 +269,6 @@
         color: #ff6b6b;
       }
 
-      /* manual path input at bottom of sidebar */
-      #sidebar-footer {
-        display: flex;
-        gap: 6px;
-        padding: 8px 10px;
-        background: #16213e;
-        flex-shrink: 0;
-        border-top: 1px solid #333;
-      }
-
-      #sidebar-footer input {
-        flex: 1;
-        padding: 4px 8px;
-        border: 1px solid #333;
-        border-radius: 3px;
-        background: #0e0e1a;
-        color: #ccc;
-        font-size: 12px;
-        min-width: 0;
-      }
-
-      #sidebar-footer button {
-        padding: 4px 10px;
-        background: #0f3460;
-        border: none;
-        border-radius: 3px;
-        color: #ddd;
-        cursor: pointer;
-        font-size: 12px;
-        white-space: nowrap;
-      }
-
-      #sidebar-footer button:hover {
-        background: #1a4a8a;
-      }
-
       /* ── main area ── */
       #main-area {
         flex: 1;
@@ -391,10 +355,7 @@
         <div id="file-list">
           <div class="file-list-loading">加载中...</div>
         </div>
-        <div id="sidebar-footer">
-          <input id="filePath" placeholder="输入路径下载文件" />
-          <button onclick="downloadFile()">下载</button>
-        </div>
+
       </div>
 
       <div id="main-area">
@@ -509,6 +470,10 @@
         terminal.focus();
         refitTerminalAfterFontsLoad();
 
+        connectWebSocket();
+      }
+
+      function connectWebSocket() {
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         const token = getToken();
         socket = new WebSocket(
@@ -516,8 +481,6 @@
         );
 
         socket.onopen = () => {
-          terminal.writeln("Connected to Linux server\r\n");
-
           const dims = fitAddon.proposeDimensions();
           if (dims) {
             socket.send(
@@ -537,6 +500,13 @@
         socket.onmessage = (event) => {
           const msg = JSON.parse(event.data);
 
+          if (msg.type === "connected") {
+            if (!msg.resuming) {
+              terminal.writeln("Connected to Linux server\r\n");
+            }
+            return;
+          }
+
           if (msg.type === "output") {
             const data = preserveClearScreenOutput(msg.data);
             if (data) {
@@ -551,7 +521,10 @@
             clearToken();
             showLogin();
           } else {
-            terminal.writeln("\r\nConnection closed");
+            terminal.writeln("\r\nConnection lost, reconnecting...");
+            setTimeout(() => {
+              if (getToken()) connectWebSocket();
+            }, 2000);
           }
         };
 
@@ -783,7 +756,7 @@
             let html = "";
 
             // parent directory entry
-            if (data.dir !== "/") {
+            if (data.dir !== data.workDir) {
               html += `<div class="file-item" onclick="navigateTo('${escapeJs(data.dir)}/..')">
                 <span class="icon">📁</span>
                 <span class="name">..</span>
@@ -872,29 +845,6 @@
           })
           .catch((err) => {
             alert("删除失败: " + err.message);
-          });
-      }
-
-      function downloadFile() {
-        const filePath = document.getElementById("filePath").value.trim();
-        if (!filePath) {
-          alert("请输入文件路径");
-          return;
-        }
-        fetchWithAuth(`/download?path=${encodeURIComponent(filePath)}`)
-          .then((r) => r.blob())
-          .then((blob) => {
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = filePath.split("/").pop();
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-          })
-          .catch(() => {
-            alert("下载失败");
           });
       }
 
