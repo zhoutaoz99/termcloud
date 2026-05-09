@@ -3,6 +3,7 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const crypto = require("crypto");
+const compression = require("compression");
 const WebSocket = require("ws");
 const pty = require("node-pty");
 const jwt = require("jsonwebtoken");
@@ -89,7 +90,17 @@ function createTerminalEnv() {
 
 // ── middleware ──
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(compression());
+app.use(express.static(path.join(__dirname, "public"), {
+  maxAge: "7d",
+  etag: true,
+  immutable: true,
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith(".woff2")) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    }
+  }
+}));
 
 // auth middleware
 function requireAuth(req, res, next) {
@@ -129,52 +140,47 @@ app.post("/api/login", (req, res) => {
 });
 
 // ── protected API routes ──
-app.get("/api/files", requireAuth, (req, res) => {
+app.get("/api/files", requireAuth, async (req, res) => {
   let dir = req.query.dir || USER_WORK_DIR;
-
-  // Resolve and safety-check the path
   dir = path.resolve(dir);
 
   if (!isPathWithinUserDir(dir)) {
     return res.status(403).json({ error: "access denied: path outside work directory" });
   }
 
-  if (!fs.existsSync(dir)) {
+  let stat;
+  try {
+    stat = await fs.promises.stat(dir);
+  } catch {
     return res.status(404).json({ error: "directory not found" });
   }
 
-  const stat = fs.statSync(dir);
   if (!stat.isDirectory()) {
     return res.status(400).json({ error: "not a directory" });
   }
 
   try {
-    const entries = fs
-      .readdirSync(dir)
-      .filter((name) => !name.startsWith("."))
-      .map((name) => {
-        const fullPath = path.join(dir, name);
-        try {
-          const s = fs.statSync(fullPath);
-          return {
-            name,
-            isFile: s.isFile(),
-            isDirectory: s.isDirectory(),
-            size: s.isFile() ? s.size : null
-          };
-        } catch {
-          return null;
-        }
-      })
-      .filter(Boolean);
-
-    res.json({ dir, entries, workDir: USER_WORK_DIR });
+    const names = await fs.promises.readdir(dir);
+    const entries = await Promise.all(
+      names
+        .filter((name) => !name.startsWith("."))
+        .map(async (name) => {
+          const fullPath = path.join(dir, name);
+          try {
+            const s = await fs.promises.stat(fullPath);
+            return { name, isFile: s.isFile(), isDirectory: s.isDirectory(), size: s.isFile() ? s.size : null };
+          } catch {
+            return null;
+          }
+        })
+    );
+    res.json({ dir, entries: entries.filter(Boolean), workDir: USER_WORK_DIR });
   } catch (err) {
     res.status(403).json({ error: "permission denied" });
   }
 });
 
-app.delete("/api/files", requireAuth, (req, res) => {
+app.delete("/api/files", requireAuth, async (req, res) => {
   const filePath = req.query.path;
 
   if (!filePath) {
@@ -187,19 +193,21 @@ app.delete("/api/files", requireAuth, (req, res) => {
     return res.status(403).json({ error: "access denied: path outside work directory" });
   }
 
-  if (!fs.existsSync(resolved)) {
+  try {
+    await fs.promises.stat(resolved);
+  } catch {
     return res.status(404).json({ error: "file not found" });
   }
 
   try {
-    fs.rmSync(resolved, { recursive: true });
+    await fs.promises.rm(resolved, { recursive: true });
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/download", requireAuth, (req, res) => {
+app.get("/download", requireAuth, async (req, res) => {
   const filePath = req.query.path;
 
   if (!filePath) {
@@ -212,11 +220,12 @@ app.get("/download", requireAuth, (req, res) => {
     return res.status(403).send("access denied: path outside work directory");
   }
 
-  if (!fs.existsSync(resolved)) {
+  let stat;
+  try {
+    stat = await fs.promises.stat(resolved);
+  } catch {
     return res.status(404).send("file not found");
   }
-
-  const stat = fs.statSync(resolved);
 
   if (!stat.isFile()) {
     return res.status(400).send("not a file");
@@ -224,6 +233,70 @@ app.get("/download", requireAuth, (req, res) => {
 
   return res.download(resolved);
 });
+
+// ── ring buffer ──
+class RingBuffer {
+  constructor(maxSize) {
+    this.maxSize = maxSize;
+    this.chunks = [];
+    this.startIdx = 0;
+    this.totalSize = 0;
+  }
+
+  push(data) {
+    this.chunks.push(data);
+    this.totalSize += data.length;
+    this._evict();
+  }
+
+  _evict() {
+    while (this.totalSize > this.maxSize && this.chunks.length - this.startIdx > 1) {
+      this.totalSize -= this.chunks[this.startIdx].length;
+      this.startIdx++;
+      if (this.startIdx > 1024) {
+        this.chunks = this.chunks.slice(this.startIdx);
+        this.startIdx = 0;
+      }
+    }
+  }
+
+  *iterChunks() {
+    for (let i = this.startIdx; i < this.chunks.length; i++) {
+      yield this.chunks[i];
+    }
+  }
+
+  get length() { return this.chunks.length - this.startIdx; }
+  get size() { return this.totalSize; }
+}
+
+// ── binary protocol helpers ──
+const MSG_OUTPUT = 0x01;
+const MSG_INPUT = 0x02;
+const MSG_RESIZE = 0x03;
+const MSG_CONNECTED = 0x04;
+const MSG_BATCH_OUTPUT = 0x05;
+
+function encodeOutput(data) {
+  const payload = Buffer.from(data, "utf8");
+  const frame = Buffer.alloc(1 + payload.length);
+  frame[0] = MSG_OUTPUT;
+  payload.copy(frame, 1);
+  return frame;
+}
+
+function encodeBatchOutput(chunks) {
+  const bufs = chunks.map(s => Buffer.from(s, "utf8"));
+  const totalLen = bufs.reduce((sum, b) => sum + b.length, 0);
+  const frame = Buffer.alloc(1 + totalLen);
+  frame[0] = MSG_BATCH_OUTPUT;
+  let offset = 1;
+  for (const b of bufs) {
+    b.copy(frame, offset);
+    offset += b.length;
+  }
+  return frame;
+}
 
 // ── terminal session management ──
 const sessions = new Map();
@@ -243,24 +316,21 @@ function getOrCreateSession(username) {
 
   const session = {
     pty: ptyProcess,
-    buffer: [],
-    bufferSize: 0,
+    buffer: new RingBuffer(1048576),
     clients: new Set(),
-    exited: false
+    exited: false,
+    batchAccumulator: [],
+    batchPending: false
   };
 
   ptyProcess.onData((data) => {
     session.buffer.push(data);
-    session.bufferSize += data.length;
-    while (session.bufferSize > 1048576 && session.buffer.length > 1) {
-      session.bufferSize -= session.buffer.shift().length;
-    }
 
-    for (const ws of session.clients) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "output", data }));
-      }
+    if (!session.batchPending) {
+      session.batchPending = true;
+      session.batchAccumulator = [];
     }
+    session.batchAccumulator.push(data);
   });
 
   ptyProcess.onExit(() => {
@@ -277,10 +347,34 @@ function getOrCreateSession(username) {
   return session;
 }
 
+// ── batch flush (16ms ≈ 60Hz) ──
+setInterval(() => {
+  for (const session of sessions.values()) {
+    if (!session.batchPending || session.clients.size === 0) continue;
+    const acc = session.batchAccumulator;
+    session.batchPending = false;
+    session.batchAccumulator = [];
+
+    const frame = acc.length === 1
+      ? encodeOutput(acc[0])
+      : encodeBatchOutput(acc);
+
+    for (const ws of session.clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(frame);
+      }
+    }
+  }
+}, 16);
+
 // ── WebSocket with auth ──
 const wss = new WebSocket.Server({
   server,
   path: "/ws/terminal",
+  perMessageDeflate: {
+    zlibDeflateOptions: { level: 1 },
+    threshold: 64
+  },
   verifyClient: (info, callback) => {
     const url = new URL(info.req.url, "http://localhost");
     const token = url.searchParams.get("token");
@@ -304,29 +398,34 @@ wss.on("connection", (ws, req) => {
   session.clients.add(ws);
 
   const isResuming = session.buffer.length > 0;
-  ws.send(JSON.stringify({ type: "connected", resuming: isResuming }));
+  const connectedFrame = Buffer.alloc(2);
+  connectedFrame[0] = MSG_CONNECTED;
+  connectedFrame[1] = isResuming ? 0x01 : 0x00;
+  ws.send(connectedFrame);
 
   if (session.buffer.length > 0) {
-    ws.send(JSON.stringify({ type: "output", data: session.buffer.join("") }));
+    for (const chunk of session.buffer.iterChunks()) {
+      ws.send(encodeOutput(chunk));
+    }
   }
 
   ws.on("message", (message) => {
     if (session.exited) return;
 
-    let msg;
-    try {
-      msg = JSON.parse(message.toString());
-    } catch (err) {
-      return;
+    const buf = Buffer.from(message);
+    if (buf.length < 1) return;
+
+    const msgType = buf[0];
+
+    if (msgType === MSG_INPUT) {
+      session.pty.write(buf.toString("utf8", 1));
     }
 
-    if (msg.type === "input") {
-      session.pty.write(msg.data);
-    }
-
-    if (msg.type === "resize") {
+    if (msgType === MSG_RESIZE && buf.length >= 5) {
       try {
-        session.pty.resize(msg.cols, msg.rows);
+        const cols = buf.readUInt16LE(1);
+        const rows = buf.readUInt16LE(3);
+        session.pty.resize(cols, rows);
       } catch (err) {
         // fd may have closed between messages
       }

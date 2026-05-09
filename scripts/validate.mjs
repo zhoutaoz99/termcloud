@@ -23,7 +23,7 @@ run('node', ['--check', 'server.js']);
 const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
 assert(html.includes('/ws/terminal'), 'index.html must connect to /ws/terminal');
 assert(html.includes('download?path='), 'index.html must include download action');
-assert(html.includes('@xterm/addon-unicode11'), 'index.html must load xterm unicode width addon');
+assert(html.includes('/vendor/addon-unicode11'), 'index.html must load xterm unicode width addon');
 assert(html.includes('terminal.unicode.activeVersion = "11"'), 'index.html must enable Unicode 11 width handling');
 assert(html.includes('font-variant-ligatures: none'), 'index.html must disable terminal font ligatures');
 assert(html.includes('rescaleOverlappingGlyphs: true'), 'index.html must prevent wide punctuation glyph overlap');
@@ -31,6 +31,14 @@ assert(html.includes('font-family: "TermMono"'), 'index.html must declare the Te
 assert(html.includes('unicode-range: U+2E80-9FFF'), 'index.html must scope CJK glyphs to the CJK @font-face via unicode-range');
 assert(html.includes('/fonts/sarasa-fixed-sc-regular.woff2'), 'index.html must reference the self-hosted Sarasa Fixed SC woff2');
 assert(html.includes('allowProposedApi: true'), 'index.html must set allowProposedApi: true for xterm Unicode11 addon');
+assert(html.includes('binaryType = "arraybuffer"'), 'index.html must use binary WebSocket protocol');
+assert(html.includes('MSG_OUTPUT'), 'index.html must define binary protocol constants');
+
+// vendor files must exist
+for (const vendorFile of ['xterm.js', 'xterm.css', 'addon-fit.js', 'addon-unicode11.js']) {
+  const vp = path.join(rootDir, 'public', 'vendor', vendorFile);
+  assert(fs.existsSync(vp), `public/vendor/${vendorFile} must exist`);
+}
 
 const fontPath = path.join(rootDir, 'public', 'fonts', 'sarasa-fixed-sc-regular.woff2');
 assert(fs.existsSync(fontPath), 'public/fonts/sarasa-fixed-sc-regular.woff2 must exist (run scripts/build-fonts.py to regenerate)');
@@ -44,5 +52,10 @@ assert(server.includes('createTerminalEnv'), 'server.js must normalize terminal 
 assert(server.includes('LC_CTYPE'), 'server.js must set UTF-8 character width locale for the pty');
 assert(!server.includes('writeFileSync(CONFIG_PATH'), 'server.js must not rewrite config.json');
 assert(!server.includes('config.jwtSecret'), 'server.js must not read jwtSecret from config.json');
+assert(server.includes('perMessageDeflate'), 'server.js must enable WebSocket compression');
+assert(server.includes('compression()'), 'server.js must enable HTTP compression middleware');
+assert(server.includes('class RingBuffer'), 'server.js must implement ring buffer');
+assert(server.includes('setInterval'), 'server.js must implement batch flush timer');
+assert(server.includes('fs.promises'), 'server.js must use async fs operations');
 
 console.log('Validation passed.');

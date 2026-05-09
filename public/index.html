@@ -7,7 +7,7 @@
 
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/@xterm/xterm/css/xterm.css"
+      href="/vendor/xterm.css"
     />
 
     <style>
@@ -364,9 +364,9 @@
       </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit/lib/addon-fit.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+    <script src="/vendor/xterm.js"></script>
+    <script src="/vendor/addon-fit.js"></script>
+    <script src="/vendor/addon-unicode11.js"></script>
 
     <script>
       // ── auth helpers ──
@@ -436,9 +436,37 @@
       }
 
       // ── terminal setup ──
+      const MSG_OUTPUT = 0x01;
+      const MSG_INPUT = 0x02;
+      const MSG_RESIZE = 0x03;
+      const MSG_CONNECTED = 0x04;
+      const MSG_BATCH_OUTPUT = 0x05;
+
       let terminalInitialized = false;
       let socket = null;
       const terminalFontFamily = '"TermMono", monospace';
+      const textDecoder = new TextDecoder();
+      const textEncoder = new TextEncoder();
+
+      // write batching: collect output and flush once per animation frame
+      let writeBuffer = [];
+      let writeFlushScheduled = false;
+
+      function flushWriteBuffer() {
+        if (writeBuffer.length > 0) {
+          terminal.write(writeBuffer.join(""));
+          writeBuffer = [];
+        }
+        writeFlushScheduled = false;
+      }
+
+      function pushOutput(data) {
+        writeBuffer.push(data);
+        if (!writeFlushScheduled) {
+          writeFlushScheduled = true;
+          requestAnimationFrame(flushWriteBuffer);
+        }
+      }
 
       const terminal = new Terminal({
         allowProposedApi: true,
@@ -479,33 +507,31 @@
         socket = new WebSocket(
           `${protocol}//${location.host}/ws/terminal?token=${token}`
         );
+        socket.binaryType = "arraybuffer";
 
         socket.onopen = () => {
           const dims = fitAddon.proposeDimensions();
           if (dims) {
-            socket.send(
-              JSON.stringify({
-                type: "resize",
-                cols: dims.cols,
-                rows: dims.rows
-              })
-            );
+            sendResize(dims.cols, dims.rows);
           }
         };
 
         socket.onmessage = (event) => {
-          const msg = JSON.parse(event.data);
+          const view = new Uint8Array(event.data);
+          if (view.length < 1) return;
+          const msgType = view[0];
+          const payload = textDecoder.decode(view.subarray(1));
 
-          if (msg.type === "connected") {
-            if (!msg.resuming) {
+          if (msgType === MSG_CONNECTED) {
+            const resuming = view.length > 1 && view[1] === 0x01;
+            if (!resuming) {
               terminal.writeln("Connected to Linux server\r\n");
             }
             return;
           }
 
-          if (msg.type === "output") {
-            terminal.write(msg.data);
-            scheduleAutoRefresh();
+          if (msgType === MSG_OUTPUT || msgType === MSG_BATCH_OUTPUT) {
+            pushOutput(payload);
           }
         };
 
@@ -527,28 +553,30 @@
 
         terminal.onData((data) => {
           if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(
-              JSON.stringify({
-                type: "input",
-                data
-              })
-            );
+            const payload = textEncoder.encode(data);
+            const frame = new Uint8Array(1 + payload.length);
+            frame[0] = MSG_INPUT;
+            frame.set(payload, 1);
+            socket.send(frame.buffer);
+          }
+          if (data === "\r" || data.includes("\r")) {
+            scheduleAutoRefresh();
           }
         });
 
       }
 
+      function sendResize(cols, rows) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        const frame = new Uint8Array([MSG_RESIZE, cols & 0xFF, cols >> 8, rows & 0xFF, rows >> 8]);
+        socket.send(frame.buffer);
+      }
+
       function fitTerminal() {
         fitAddon.fit();
         const dims = fitAddon.proposeDimensions();
-        if (dims && socket && socket.readyState === WebSocket.OPEN) {
-          socket.send(
-            JSON.stringify({
-              type: "resize",
-              cols: dims.cols,
-              rows: dims.rows
-            })
-          );
+        if (dims) {
+          sendResize(dims.cols, dims.rows);
         }
       }
 
@@ -596,18 +624,12 @@
             currentDir = data.dir;
             document.getElementById("current-path").textContent = data.dir;
 
-            let html = "";
+            const fragment = document.createDocumentFragment();
 
-            // parent directory entry
             if (data.dir !== data.workDir) {
-              html += `<div class="file-item" onclick="navigateTo('${escapeJs(data.dir)}/..')">
-                <span class="icon">📁</span>
-                <span class="name">..</span>
-                <span></span>
-              </div>`;
+              fragment.appendChild(createFileItemParent(data.dir));
             }
 
-            // sort: directories first, then files
             const sorted = data.entries.sort((a, b) => {
               if (a.isDirectory !== b.isDirectory)
                 return a.isDirectory ? -1 : 1;
@@ -615,30 +637,67 @@
             });
 
             for (const entry of sorted) {
-              if (entry.isDirectory) {
-                const fullPath = `${data.dir}/${entry.name}`.replace(/\/+/g, "/");
-                html += `<div class="file-item" onclick="navigateTo('${escapeJs(fullPath)}')">
-                  <span class="icon">📁</span>
-                  <span class="name">${escapeHtml(entry.name)}</span>
-                  <span></span>
-                </div>`;
-              } else {
-                const fullPath = `${data.dir}/${entry.name}`.replace(/\/+/g, "/");
-                html += `<div class="file-item" onclick="navigateTo('${escapeJs(pathDir(fullPath))}')">
-                  <span class="icon">📄</span>
-                  <span class="name">${escapeHtml(entry.name)}</span>
-                  <button class="delete-btn" onclick="event.stopPropagation(); deleteItem('${escapeJs(fullPath)}')" title="删除">✕</button>
-                  <button class="download-btn" onclick="event.stopPropagation(); downloadItem('${escapeJs(fullPath)}')" title="下载">⬇</button>
-                </div>`;
-              }
+              const fullPath = `${data.dir}/${entry.name}`.replace(/\/+/g, "/");
+              fragment.appendChild(createFileItem(entry, fullPath, data.dir));
             }
 
-            listEl.innerHTML = html || '<div class="file-list-loading">空目录</div>';
+            listEl.replaceChildren(fragment.hasChildNodes() ? fragment : createEmptyMessage("空目录"));
           })
           .catch(() => {
-            listEl.innerHTML =
-              '<div class="file-list-loading">加载失败</div>';
+            listEl.replaceChildren(createEmptyMessage("加载失败"));
           });
+      }
+
+      function createEmptyMessage(text) {
+        const div = document.createElement("div");
+        div.className = "file-list-loading";
+        div.textContent = text;
+        return div;
+      }
+
+      function createFileItemParent(parentDir) {
+        const item = document.createElement("div");
+        item.className = "file-item";
+        item.innerHTML = '<span class="icon">📁</span><span class="name">..</span>';
+        item.addEventListener("click", () => navigateTo(parentDir));
+        return item;
+      }
+
+      function createFileItem(entry, fullPath, parentDir) {
+        const item = document.createElement("div");
+        item.className = "file-item";
+
+        const icon = document.createElement("span");
+        icon.className = "icon";
+        icon.textContent = entry.isDirectory ? "📁" : "📄";
+        item.appendChild(icon);
+
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = entry.name;
+        item.appendChild(name);
+
+        if (entry.isDirectory) {
+          item.addEventListener("click", () => navigateTo(fullPath));
+        } else {
+          item.addEventListener("click", () => navigateTo(pathDir(fullPath)));
+
+          const deleteBtn = document.createElement("button");
+          deleteBtn.className = "delete-btn";
+          deleteBtn.title = "删除";
+          deleteBtn.textContent = "✕";
+          deleteBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteItem(fullPath); });
+          item.appendChild(deleteBtn);
+
+          const downloadBtn = document.createElement("button");
+          downloadBtn.className = "download-btn";
+          downloadBtn.title = "下载";
+          downloadBtn.textContent = "⬇";
+          downloadBtn.addEventListener("click", (e) => { e.stopPropagation(); downloadItem(fullPath); });
+          item.appendChild(downloadBtn);
+        }
+
+        return item;
       }
 
       function navigateTo(dir) {
@@ -694,18 +753,6 @@
       function pathDir(fullPath) {
         const idx = fullPath.lastIndexOf("/");
         return idx > 0 ? fullPath.substring(0, idx) : "/";
-      }
-
-      function escapeHtml(str) {
-        return str
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;");
-      }
-
-      function escapeJs(str) {
-        return str.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
       }
 
       // ── startup: check existing token ──
