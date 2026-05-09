@@ -493,10 +493,6 @@
           }
         };
 
-        let pendingAnsiFragment = "";
-        let pendingCursorHome = "";
-        let justPreservedClear = false;
-
         socket.onmessage = (event) => {
           const msg = JSON.parse(event.data);
 
@@ -508,10 +504,7 @@
           }
 
           if (msg.type === "output") {
-            const data = preserveClearScreenOutput(msg.data);
-            if (data) {
-              terminal.write(data);
-            }
+            terminal.write(msg.data);
             scheduleAutoRefresh();
           }
         };
@@ -543,156 +536,6 @@
           }
         });
 
-        function preserveClearScreenOutput(data) {
-          const input = pendingAnsiFragment + data;
-          pendingAnsiFragment = "";
-
-          const output = [];
-          let index = 0;
-
-          function flushPendingCursorHome() {
-            if (pendingCursorHome) {
-              output.push(pendingCursorHome);
-              pendingCursorHome = "";
-            }
-          }
-
-          function appendText(text) {
-            if (!text) {
-              return;
-            }
-            flushPendingCursorHome();
-            justPreservedClear = false;
-            output.push(text);
-          }
-
-          function appendClearBoundary() {
-            output.push("\r\n");
-          }
-
-          while (index < input.length) {
-            const escapeIndex = input.indexOf("\x1b", index);
-
-            if (escapeIndex === -1) {
-              appendText(input.slice(index));
-              break;
-            }
-
-            appendText(input.slice(index, escapeIndex));
-
-            const sequence = readAnsiSequence(input, escapeIndex);
-            if (!sequence) {
-              pendingAnsiFragment = input.slice(escapeIndex);
-              break;
-            }
-
-            if (isCursorHome(sequence)) {
-              if (!justPreservedClear) {
-                flushPendingCursorHome();
-                pendingCursorHome = sequence;
-              }
-            } else if (isFullScreenClear(sequence)) {
-              pendingCursorHome = "";
-              if (!justPreservedClear) {
-                appendClearBoundary();
-                justPreservedClear = true;
-              }
-            } else if (isScrollbackClear(sequence)) {
-              pendingCursorHome = "";
-            } else {
-              flushPendingCursorHome();
-              output.push(sequence);
-            }
-
-            index = escapeIndex + sequence.length;
-          }
-
-          return output.join("");
-        }
-
-        function readAnsiSequence(input, index) {
-          if (index + 1 >= input.length) {
-            return null;
-          }
-
-          const type = input[index + 1];
-
-          if (type === "[") {
-            for (let i = index + 2; i < input.length; i += 1) {
-              const code = input.charCodeAt(i);
-              if (code >= 0x40 && code <= 0x7e) {
-                return input.slice(index, i + 1);
-              }
-            }
-            return null;
-          }
-
-          if (type === "]") {
-            for (let i = index + 2; i < input.length; i += 1) {
-              if (input.charCodeAt(i) === 0x07) {
-                return input.slice(index, i + 1);
-              }
-              if (input[i] === "\x1b" && input[i + 1] === "\\") {
-                return input.slice(index, i + 2);
-              }
-            }
-            return null;
-          }
-
-          if (type === "P" || type === "^" || type === "_") {
-            for (let i = index + 2; i < input.length; i += 1) {
-              if (input[i] === "\x1b" && input[i + 1] === "\\") {
-                return input.slice(index, i + 2);
-              }
-            }
-            return null;
-          }
-
-          for (let i = index + 1; i < input.length; i += 1) {
-            const code = input.charCodeAt(i);
-            if (code >= 0x30 && code <= 0x7e) {
-              return input.slice(index, i + 1);
-            }
-            if (code < 0x20 || code > 0x2f) {
-              return input.slice(index, i + 1);
-            }
-          }
-
-          return null;
-        }
-
-        function getCsi(sequence) {
-          if (!sequence.startsWith("\x1b[")) {
-            return null;
-          }
-
-          return {
-            final: sequence[sequence.length - 1],
-            params: sequence.slice(2, -1)
-          };
-        }
-
-        function isCursorHome(sequence) {
-          const csi = getCsi(sequence);
-          if (!csi || (csi.final !== "H" && csi.final !== "f")) {
-            return false;
-          }
-
-          const parts = csi.params.split(";");
-          const row = parts[0] || "1";
-          const col = parts[1] || "1";
-          return (parts.length === 1 || parts.length === 2) && row === "1" && col === "1";
-        }
-
-        function isFullScreenClear(sequence) {
-          const csi = getCsi(sequence);
-          return csi?.final === "J" && csi.params === "2";
-        }
-
-        function isScrollbackClear(sequence) {
-          const csi = getCsi(sequence);
-          return csi?.final === "J" && csi.params === "3";
-        }
       }
 
       function fitTerminal() {
