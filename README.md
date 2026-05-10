@@ -106,16 +106,16 @@ USERNAME=myuser PASSWORD=mypassword docker-compose up -d
 
 ```bash
 # 查看日志
-docker compose logs -f
+docker-compose logs -f
 
 # 停止服务
-docker compose down
+docker-compose down
 
 # 停止并删除数据
-docker compose down -v
+docker-compose down -v
 
 # 重新构建（代码更新后）
-docker compose up -d --build
+docker-compose up -d --build
 ```
 
 ### 开发模式
