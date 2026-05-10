@@ -1,0 +1,311 @@
+/* Split ASCII and CJK/fullwidth into separate font sources via unicode-range,
+   so per-character fallback can no longer pick a Western font for CJK
+   punctuation and render it at the wrong width (which misaligns markdown
+   tables in xterm.js). */
+@font-face {
+  font-family: "TermMono";
+  src: local("ui-monospace"), local("SFMono-Regular"), local("SF Mono"),
+       local("Menlo"), local("Monaco"), local("Consolas"),
+       local("Liberation Mono"), local("DejaVu Sans Mono");
+  unicode-range: U+0000-024F, U+2000-22FF;
+}
+@font-face {
+  font-family: "TermMono";
+  /* Catch-all for characters not covered by the ASCII @font-face above.
+     CJK monospace fonts first (each glyph is exactly 2× ASCII width,
+     keeping markdown tables aligned in xterm.js); proportional CJK fonts
+     are last-resort fallbacks only. */
+  src: local("Sarasa Mono SC"), local("Sarasa Fixed SC"),
+       local("Noto Sans Mono CJK SC"), local("Source Han Mono SC"),
+       local("WenQuanYi Micro Hei Mono"),
+       local("PingFang SC"), local("Hiragino Sans GB"),
+       local("Microsoft YaHei"), local("SimHei"), local("SimSun");
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: #111;
+  font-family: sans-serif;
+  overflow: hidden;
+}
+
+/* ── login overlay ── */
+#login-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #111;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+#login-box {
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 36px 32px;
+  width: 340px;
+  box-sizing: border-box;
+}
+
+#login-box h2 {
+  margin: 0 0 24px;
+  color: #ddd;
+  font-size: 20px;
+  text-align: center;
+  font-weight: 500;
+}
+
+#login-box label {
+  display: block;
+  color: #aaa;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+#login-box input[type="text"],
+#login-box input[type="password"] {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  border: 1px solid #333;
+  border-radius: 4px;
+  background: #0e0e1a;
+  color: #ddd;
+  font-size: 14px;
+  box-sizing: border-box;
+  outline: none;
+}
+
+#login-box input[type="text"]:focus,
+#login-box input[type="password"]:focus {
+  border-color: #0f3460;
+}
+
+#login-box button[type="submit"] {
+  width: 100%;
+  padding: 10px;
+  background: #0f3460;
+  border: none;
+  border-radius: 4px;
+  color: #ddd;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+#login-box button[type="submit"]:hover {
+  background: #1a4a8a;
+}
+
+#login-error {
+  color: #e74c3c;
+  font-size: 13px;
+  text-align: center;
+  margin-top: 12px;
+  min-height: 18px;
+}
+
+#app-container {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+/* ── sidebar ── */
+#sidebar {
+  width: 260px;
+  min-width: 0;
+  background: #1a1a2e;
+  color: #ccc;
+  display: flex;
+  flex-direction: column;
+  transition: width 0.25s ease;
+  overflow: hidden;
+  border-right: 1px solid #333;
+}
+
+#sidebar.hidden {
+  width: 0;
+  border-right: none;
+}
+
+#sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: #16213e;
+  flex-shrink: 0;
+}
+
+#sidebar-header .path-text {
+  font-size: 12px;
+  color: #aaa;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+#sidebar-header button {
+  background: none;
+  border: none;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+#sidebar-header button:hover {
+  color: #fff;
+}
+
+#file-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+#file-list::-webkit-scrollbar {
+  width: 5px;
+}
+
+#file-list::-webkit-scrollbar-thumb {
+  background: #444;
+  border-radius: 3px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 10px;
+  cursor: pointer;
+  gap: 8px;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-item:hover {
+  background: #0f3460;
+}
+
+.file-item .icon {
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+  font-size: 14px;
+}
+
+.file-item .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-item .download-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #5fa8d3;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.file-item .delete-btn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #e05555;
+  cursor: pointer;
+  font-size: 15px;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.file-item:hover .download-btn,
+.file-item:hover .delete-btn {
+  opacity: 1;
+}
+
+.file-item .download-btn:hover {
+  color: #7ec8e3;
+}
+
+.file-item .delete-btn:hover {
+  color: #ff6b6b;
+}
+
+/* ── main area ── */
+#main-area {
+  flex: 1;
+  display: flex;
+  position: relative;
+  min-width: 0;
+}
+
+#toggle-btn {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 8px 5px;
+  display: none;
+  transition: color 0.15s;
+}
+
+#toggle-btn:hover {
+  color: #fff;
+}
+
+#sidebar.hidden ~ #main-area #toggle-btn {
+  display: block;
+}
+
+#terminal {
+  width: 100%;
+  height: 100%;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
+}
+
+#terminal .xterm,
+#terminal .xterm-rows {
+  font-variant-ligatures: none;
+  font-feature-settings:
+    "liga" 0,
+    "calt" 0;
+}
+
+/* loading state */
+.file-list-loading {
+  text-align: center;
+  padding: 20px;
+  color: #555;
+  font-size: 12px;
+}
