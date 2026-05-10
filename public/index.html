@@ -24,20 +24,15 @@
       }
       @font-face {
         font-family: "TermMono";
-        /* Self-hosted Sarasa Fixed SC (GB 2312 subset, ~970 KB woff2). Sarasa Fixed
-           forces CJK glyphs to be exactly 2× ASCII width, so markdown tables stay
-           aligned regardless of which CJK fonts the visitor has installed. The
-           local() chain is fallback when the woff2 fails to load or is still
-           in-flight. font-display:swap shows fallback glyphs immediately so the
-           initial paint isn't blocked on the font download. */
-        src: url("/fonts/sarasa-fixed-sc-regular.woff2") format("woff2"),
-             local("Sarasa Fixed SC"), local("Sarasa Mono SC"),
+        /* Catch-all for characters not covered by the ASCII @font-face above.
+           CJK monospace fonts first (each glyph is exactly 2× ASCII width,
+           keeping markdown tables aligned in xterm.js); proportional CJK fonts
+           are last-resort fallbacks only. */
+        src: local("Sarasa Mono SC"), local("Sarasa Fixed SC"),
              local("Noto Sans Mono CJK SC"), local("Source Han Mono SC"),
+             local("WenQuanYi Micro Hei Mono"),
              local("PingFang SC"), local("Hiragino Sans GB"),
-             local("Microsoft YaHei"), local("SimHei"), local("SimSun"),
-             local("WenQuanYi Micro Hei Mono");
-        unicode-range: U+2E80-9FFF, U+3000-303F, U+FF00-FFEF, U+3400-4DBF;
-        font-display: swap;
+             local("Microsoft YaHei"), local("SimHei"), local("SimSun");
       }
 
       html,
@@ -585,11 +580,9 @@
           return;
         }
 
-        // Force-activate the ASCII and CJK ranges of "TermMono" so the
-        // self-hosted woff2 (~970 KB) finishes downloading before xterm.js
-        // measures the cell width. Without this probe the woff2 stays lazy
-        // until the first CJK character is rendered, and the font swap that
-        // happens mid-session leaves cell metrics out of date.
+        // Force-activate both unicode-range @font-face blocks for "TermMono"
+        // before xterm.js measures the cell width, so the CJK @font-face
+        // takes effect from the first render.
         const probes = [
           document.fonts.load('14px "TermMono"', "Aa"),
           document.fonts.load('14px "TermMono"', "中，。：（）")

@@ -28,8 +28,8 @@ assert(html.includes('terminal.unicode.activeVersion = "11"'), 'index.html must 
 assert(html.includes('font-variant-ligatures: none'), 'index.html must disable terminal font ligatures');
 assert(html.includes('rescaleOverlappingGlyphs: true'), 'index.html must prevent wide punctuation glyph overlap');
 assert(html.includes('font-family: "TermMono"'), 'index.html must declare the TermMono unicode-range @font-face family');
-assert(html.includes('unicode-range: U+2E80-9FFF'), 'index.html must scope CJK glyphs to the CJK @font-face via unicode-range');
-assert(html.includes('/fonts/sarasa-fixed-sc-regular.woff2'), 'index.html must reference the self-hosted Sarasa Fixed SC woff2');
+assert(!html.includes('unicode-range: U+2E80'), 'CJK @font-face must NOT declare unicode-range (it must act as catch-all for TermMono)');
+assert(html.includes('local("Sarasa Mono SC")'), 'CJK @font-face must prioritize CJK monospace fonts for correct glyph width');
 assert(html.includes('allowProposedApi: true'), 'index.html must set allowProposedApi: true for xterm Unicode11 addon');
 assert(html.includes('binaryType = "arraybuffer"'), 'index.html must use binary WebSocket protocol');
 assert(html.includes('MSG_OUTPUT'), 'index.html must define binary protocol constants');
@@ -40,10 +40,6 @@ for (const vendorFile of ['xterm.js', 'xterm.css', 'addon-fit.js', 'addon-unicod
   assert(fs.existsSync(vp), `public/vendor/${vendorFile} must exist`);
 }
 
-const fontPath = path.join(rootDir, 'public', 'fonts', 'sarasa-fixed-sc-regular.woff2');
-assert(fs.existsSync(fontPath), 'public/fonts/sarasa-fixed-sc-regular.woff2 must exist (run scripts/build-fonts.py to regenerate)');
-const fontHeader = fs.readFileSync(fontPath).slice(0, 4).toString('binary');
-assert(fontHeader === 'wOF2', `font file is not a valid woff2 (header: ${JSON.stringify(fontHeader)})`);
 
 const server = fs.readFileSync(path.join(rootDir, 'server.js'), 'utf8');
 assert(server.includes('app.get("/download"'), 'server.js must expose /download endpoint');
