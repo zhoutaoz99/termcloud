@@ -114,6 +114,115 @@ body {
   min-height: 18px;
 }
 
+/* ── Poe config overlay ── */
+#poe-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #111;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+#poe-box {
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 36px 32px;
+  width: 380px;
+  box-sizing: border-box;
+}
+
+#poe-box h2 {
+  margin: 0 0 8px;
+  color: #ddd;
+  font-size: 20px;
+  text-align: center;
+  font-weight: 500;
+}
+
+.poe-desc {
+  color: #bbb;
+  font-size: 14px;
+  text-align: center;
+  margin: 0 0 20px;
+  line-height: 1.5;
+}
+
+#poe-box label {
+  display: block;
+  color: #ccc;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+#poe-key {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  border: 1px solid #333;
+  border-radius: 4px;
+  background: #0e0e1a;
+  color: #ddd;
+  font-size: 14px;
+  box-sizing: border-box;
+  outline: none;
+  font-family: monospace;
+}
+
+#poe-key:focus {
+  border-color: #0f3460;
+}
+
+#poe-key::placeholder {
+  color: #666;
+}
+
+#poe-form button[type="submit"] {
+  width: 100%;
+  padding: 10px;
+  background: #0f3460;
+  border: none;
+  border-radius: 4px;
+  color: #ddd;
+  font-size: 14px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+
+#poe-form button[type="submit"]:hover {
+  background: #1a4a8a;
+}
+
+.poe-skip-btn {
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #888;
+  font-size: 13px;
+  cursor: pointer;
+  margin-top: 8px;
+}
+
+.poe-skip-btn:hover {
+  color: #bbb;
+  border-color: #555;
+}
+
+#poe-error {
+  color: #e74c3c;
+  font-size: 13px;
+  text-align: center;
+  margin-top: 12px;
+  min-height: 18px;
+}
+
 #app-container {
   display: flex;
   width: 100%;

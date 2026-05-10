@@ -68,13 +68,28 @@ function getDefaultUtf8Locale() {
   return process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 }
 
+const POE_KEY_FILE = path.join(USER_WORK_DIR, ".poe_api_key");
+
+function isPoeConfigured() {
+  return fs.existsSync(POE_KEY_FILE);
+}
+
 function createTerminalEnv() {
   const fallbackLocale = process.env.TERMCLOUD_UTF8_LOCALE || getDefaultUtf8Locale();
   const env = {
     ...process.env,
     TERM: "xterm-256color",
-    COLORTERM: process.env.COLORTERM || "truecolor"
+    COLORTERM: process.env.COLORTERM || "truecolor",
+    HOME: USER_WORK_DIR
   };
+
+  if (isPoeConfigured()) {
+    const apiKey = fs.readFileSync(POE_KEY_FILE, "utf8").trim();
+    env.ANTHROPIC_BASE_URL = "https://api.poe.com";
+    env.ANTHROPIC_AUTH_TOKEN = apiKey;
+    env.ANTHROPIC_API_KEY = "";
+  }
+
   const activeLocale = env.LC_ALL || env.LC_CTYPE || env.LANG;
 
   if (!isUtf8Locale(activeLocale)) {
@@ -176,7 +191,42 @@ app.post("/api/login", express.json(), checkLoginRate, (req, res) => {
   }
 
   const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: "24h" });
-  res.json({ token });
+  res.json({ token, poeConfigured: isPoeConfigured() });
+});
+
+// ── Poe config endpoints ──
+app.get("/api/poe-status", requireAuth, (req, res) => {
+  res.json({ configured: isPoeConfigured() });
+});
+
+app.post("/api/poe-config", requireAuth, express.json(), (req, res) => {
+  const { apiKey } = req.body;
+  if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
+    return res.status(400).json({ error: "API key is required" });
+  }
+
+  try {
+    fs.writeFileSync(POE_KEY_FILE, apiKey.trim());
+    const bashrcPath = path.join(USER_WORK_DIR, ".bashrc");
+    const envLines = [
+      "",
+      "# Poe API configuration",
+      'export ANTHROPIC_BASE_URL="https://api.poe.com"',
+      `export ANTHROPIC_AUTH_TOKEN="${apiKey.trim()}"`,
+      'export ANTHROPIC_API_KEY=""'
+    ].join("\n");
+
+    let bashrc = "";
+    if (fs.existsSync(bashrcPath)) {
+      bashrc = fs.readFileSync(bashrcPath, "utf8");
+      bashrc = bashrc.replace(/\n*# Poe API configuration\n.*/s, "");
+    }
+    fs.writeFileSync(bashrcPath, bashrc + envLines + "\n");
+
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save configuration: " + err.message });
+  }
 });
 
 // ── protected API routes ──

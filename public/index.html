@@ -28,6 +28,20 @@
       </div>
     </div>
 
+    <div id="poe-overlay" style="display:none">
+      <div id="poe-box">
+        <h2>Poe API 配置</h2>
+        <p class="poe-desc">首次使用需配置 Poe API Key，用于 Claude Code 接入</p>
+        <form id="poe-form" onsubmit="handlePoeConfig(event)">
+          <label for="poe-key">Poe API Key</label>
+          <input type="password" id="poe-key" placeholder="输入你的 Poe API Key" required />
+          <button type="submit">保存并进入</button>
+          <button type="button" class="poe-skip-btn" onclick="skipPoeConfig()">跳过</button>
+        </form>
+        <div id="poe-error"></div>
+      </div>
+    </div>
+
     <div id="app-container" style="display:none">
       <div id="sidebar">
         <div id="sidebar-header">
@@ -66,11 +80,20 @@
 
       function showLogin() {
         document.getElementById("login-overlay").style.display = "flex";
+        document.getElementById("poe-overlay").style.display = "none";
         document.getElementById("app-container").style.display = "none";
+      }
+
+      function showPoeConfig() {
+        document.getElementById("login-overlay").style.display = "none";
+        document.getElementById("poe-overlay").style.display = "flex";
+        document.getElementById("app-container").style.display = "none";
+        document.getElementById("poe-key").focus();
       }
 
       function showApp() {
         document.getElementById("login-overlay").style.display = "none";
+        document.getElementById("poe-overlay").style.display = "none";
         document.getElementById("app-container").style.display = "flex";
         initTerminal();
         loadFiles("");
@@ -92,7 +115,11 @@
           .then((data) => {
             if (data.token) {
               setToken(data.token);
-              showApp();
+              if (!data.poeConfigured) {
+                showPoeConfig();
+              } else {
+                showApp();
+              }
             } else {
               errorEl.textContent = data.error || "登录失败";
             }
@@ -100,6 +127,34 @@
           .catch(() => {
             errorEl.textContent = "网络错误";
           });
+      }
+
+      window.handlePoeConfig = function (event) {
+        event.preventDefault();
+        const apiKey = document.getElementById("poe-key").value;
+        const errorEl = document.getElementById("poe-error");
+        errorEl.textContent = "";
+
+        fetchWithAuth("/api/poe-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ apiKey })
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.ok) {
+              showApp();
+            } else {
+              errorEl.textContent = data.error || "保存失败";
+            }
+          })
+          .catch(() => {
+            errorEl.textContent = "网络错误";
+          });
+      }
+
+      window.skipPoeConfig = function () {
+        showApp();
       }
 
       function fetchWithAuth(url, options) {
@@ -417,8 +472,15 @@
       (function () {
         const token = getToken();
         if (token) {
-          fetchWithAuth("/api/files?dir=")
-            .then(() => showApp())
+          fetchWithAuth("/api/poe-status")
+            .then((r) => r.json())
+            .then((data) => {
+              if (data.configured) {
+                showApp();
+              } else {
+                showPoeConfig();
+              }
+            })
             .catch(() => showLogin());
         } else {
           showLogin();
