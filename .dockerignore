@@ -1,0 +1,8 @@
+node_modules
+.git
+.github
+.claude
+.jwt_secret
+config.json
+npm-debug.log*
+.DS_Store

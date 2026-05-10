@@ -78,6 +78,46 @@ http://<server-ip>:3000
 | `PORT` | 服务监听端口 | `3000` |
 | `TERMCLOUD_UTF8_LOCALE` | PTY 的 UTF-8 locale | `en_US.UTF-8` (macOS) / `C.UTF-8` (Linux) |
 
+### Docker 部署
+
+使用 Docker Compose 一键部署：
+
+```bash
+# 使用默认凭据（admin/admin）
+docker compose up -d
+
+# 自定义用户名和密码
+USERNAME=myuser PASSWORD=mypassword docker compose up -d
+```
+
+访问 `http://<server-ip>:3000` 即可使用。
+
+**环境变量：**
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `USERNAME` | 登录用户名 | `admin` |
+| `PASSWORD` | 登录密码 | `admin` |
+| `PORT` | 宿主机映射端口 | `3000` |
+
+**数据持久化：** 用户文件存储在 Docker volume `termcloud-data` 中，删除容器不会丢失数据。
+
+**常用命令：**
+
+```bash
+# 查看日志
+docker compose logs -f
+
+# 停止服务
+docker compose down
+
+# 停止并删除数据
+docker compose down -v
+
+# 重新构建（代码更新后）
+docker compose up -d --build
+```
+
 ### 开发模式
 
 ```bash
@@ -94,6 +134,9 @@ npm run dev
 ├── .jwt_secret              # JWT 签名密钥（自动生成，已 gitignore）
 ├── package.json
 ├── server.js                # 后端：Express + WebSocket + node-pty
+├── docker-compose.yml       # Docker Compose 编排
+├── Dockerfile               # Docker 镜像构建
+├── docker-entrypoint.sh     # 容器入口脚本（从环境变量生成 config.json）
 ├── scripts/
 │   └── validate.mjs         # CI 校验脚本
 └── public/

@@ -1,0 +1,15 @@
+services:
+  termcloud:
+    build: .
+    container_name: termcloud
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - USERNAME=${USERNAME:-admin}
+      - PASSWORD=${PASSWORD:-admin}
+    volumes:
+      - termcloud-data:/data
+    restart: unless-stopped
+
+volumes:
+  termcloud-data:
