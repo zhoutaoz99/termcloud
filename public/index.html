@@ -47,11 +47,12 @@
       </div>
     </div>
 
-    <script src="/vendor/xterm.js"></script>
-    <script src="/vendor/addon-fit.js"></script>
-    <script src="/vendor/addon-unicode11.js"></script>
+    <script defer src="/vendor/xterm.js"></script>
+    <script defer src="/vendor/addon-fit.js"></script>
+    <script defer src="/vendor/addon-unicode11.js"></script>
 
     <script>
+      document.addEventListener("DOMContentLoaded", function () {
       // ── auth helpers ──
       function getToken() {
         return localStorage.getItem("token");
@@ -233,21 +234,21 @@
         socket.onerror = () => {
           terminal.writeln("\r\nConnection error");
         };
-
-        terminal.onData((data) => {
-          if (socket && socket.readyState === WebSocket.OPEN) {
-            const payload = textEncoder.encode(data);
-            const frame = new Uint8Array(1 + payload.length);
-            frame[0] = MSG_INPUT;
-            frame.set(payload, 1);
-            socket.send(frame.buffer);
-          }
-          if (data === "\r" || data.includes("\r")) {
-            scheduleAutoRefresh();
-          }
-        });
-
       }
+
+      // Register once — not inside connectWebSocket, to avoid listener accumulation on reconnection
+      terminal.onData((data) => {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          const payload = textEncoder.encode(data);
+          const frame = new Uint8Array(1 + payload.length);
+          frame[0] = MSG_INPUT;
+          frame.set(payload, 1);
+          socket.send(frame.buffer);
+        }
+        if (data === "\r" || data.includes("\r")) {
+          scheduleAutoRefresh();
+        }
+      });
 
       function sendResize(cols, rows) {
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -294,12 +295,17 @@
 
       // ── file browser ──
       let currentDir = "";
+      let loadFilesAbort = null;
 
       function loadFiles(dir) {
+        if (loadFilesAbort) loadFilesAbort.abort();
+        loadFilesAbort = new AbortController();
+        const { signal } = loadFilesAbort;
+
         const listEl = document.getElementById("file-list");
         listEl.innerHTML = '<div class="file-list-loading">加载中...</div>';
 
-        fetchWithAuth(`/api/files?dir=${encodeURIComponent(dir)}`)
+        fetchWithAuth(`/api/files?dir=${encodeURIComponent(dir)}`, { signal })
           .then((r) => r.json())
           .then((data) => {
             currentDir = data.dir;
@@ -324,7 +330,8 @@
 
             listEl.replaceChildren(fragment.hasChildNodes() ? fragment : createEmptyMessage("空目录"));
           })
-          .catch(() => {
+          .catch((err) => {
+            if (err.name === "AbortError") return;
             listEl.replaceChildren(createEmptyMessage("加载失败"));
           });
       }
@@ -447,6 +454,8 @@
           showLogin();
         }
       })();
+
+      }); // end DOMContentLoaded
     </script>
   </body>
 </html>

@@ -160,18 +160,23 @@ app.get("/api/files", requireAuth, async (req, res) => {
   }
 
   try {
-    const names = await fs.promises.readdir(dir);
+    const dirents = await fs.promises.readdir(dir, { withFileTypes: true });
     const entries = await Promise.all(
-      names
-        .filter((name) => !name.startsWith("."))
-        .map(async (name) => {
-          const fullPath = path.join(dir, name);
-          try {
-            const s = await fs.promises.stat(fullPath);
-            return { name, isFile: s.isFile(), isDirectory: s.isDirectory(), size: s.isFile() ? s.size : null };
-          } catch {
-            return null;
+      dirents
+        .filter((d) => !d.name.startsWith("."))
+        .map(async (d) => {
+          const isFile = d.isFile();
+          const isDirectory = d.isDirectory();
+          let size = null;
+          if (isFile) {
+            try {
+              const s = await fs.promises.stat(path.join(dir, d.name));
+              size = s.size;
+            } catch {
+              return null;
+            }
           }
+          return { name: d.name, isFile, isDirectory, size };
         })
     );
     res.json({ dir, entries: entries.filter(Boolean), workDir: USER_WORK_DIR });
@@ -344,28 +349,38 @@ function getOrCreateSession(username) {
   });
 
   sessions.set(username, session);
+  startBatchFlush();
   return session;
 }
 
 // ── batch flush (16ms ≈ 60Hz) ──
-setInterval(() => {
-  for (const session of sessions.values()) {
-    if (!session.batchPending || session.clients.size === 0) continue;
-    const acc = session.batchAccumulator;
-    session.batchPending = false;
-    session.batchAccumulator = [];
+let batchFlushTimer = null;
 
-    const frame = acc.length === 1
-      ? encodeOutput(acc[0])
-      : encodeBatchOutput(acc);
+function startBatchFlush() {
+  if (batchFlushTimer) return;
+  batchFlushTimer = setInterval(() => {
+    for (const session of sessions.values()) {
+      if (!session.batchPending || session.clients.size === 0) continue;
+      const acc = session.batchAccumulator;
+      session.batchPending = false;
+      session.batchAccumulator = [];
 
-    for (const ws of session.clients) {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(frame);
+      const frame = acc.length === 1
+        ? encodeOutput(acc[0])
+        : encodeBatchOutput(acc);
+
+      for (const ws of session.clients) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(frame);
+        }
       }
     }
-  }
-}, 16);
+    if (sessions.size === 0) {
+      clearInterval(batchFlushTimer);
+      batchFlushTimer = null;
+    }
+  }, 16);
+}
 
 // ── WebSocket with auth ──
 const wss = new WebSocket.Server({
@@ -404,9 +419,8 @@ wss.on("connection", (ws, req) => {
   ws.send(connectedFrame);
 
   if (session.buffer.length > 0) {
-    for (const chunk of session.buffer.iterChunks()) {
-      ws.send(encodeOutput(chunk));
-    }
+    const chunks = [...session.buffer.iterChunks()];
+    ws.send(chunks.length === 1 ? encodeOutput(chunks[0]) : encodeBatchOutput(chunks));
   }
 
   ws.on("message", (message) => {
