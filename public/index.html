@@ -51,6 +51,9 @@
         <div id="file-list">
           <div class="file-list-loading">加载中...</div>
         </div>
+        <div id="sidebar-footer">
+          <button id="poe-config-btn" title="配置 Poe API Key">⚙️ Poe 配置</button>
+        </div>
 
       </div>
 
@@ -90,6 +93,14 @@
         document.getElementById("app-container").style.display = "none";
         document.getElementById("poe-key").focus();
       }
+
+      document.getElementById("poe-config-btn").addEventListener("click", function () {
+        document.getElementById("poe-overlay").style.display = "flex";
+        document.getElementById("app-container").style.display = "none";
+        document.getElementById("poe-key").value = "";
+        document.getElementById("poe-error").textContent = "";
+        document.getElementById("poe-key").focus();
+      });
 
       function showApp() {
         document.getElementById("login-overlay").style.display = "none";

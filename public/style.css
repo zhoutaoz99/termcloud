@@ -354,6 +354,30 @@ body {
   color: #ff6b6b;
 }
 
+#sidebar-footer {
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border-top: 1px solid #333;
+  background: #16213e;
+}
+
+#poe-config-btn {
+  width: 100%;
+  padding: 7px 0;
+  background: #0f3460;
+  color: #aaa;
+  border: 1px solid #333;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: color 0.15s, background 0.15s;
+}
+
+#poe-config-btn:hover {
+  color: #fff;
+  background: #1a4a8a;
+}
+
 /* ── main area ── */
 #main-area {
   flex: 1;
