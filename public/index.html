@@ -16,6 +16,7 @@
   <body>
     <div id="login-overlay">
       <div id="login-box">
+        <div class="dialog-kicker">TermCloud</div>
         <h2>Web Linux Console</h2>
         <form id="login-form" onsubmit="handleLogin(event)">
           <label for="login-username">用户名</label>
@@ -30,6 +31,7 @@
 
     <div id="claude-config-overlay" style="display:none">
       <div id="claude-config-box">
+        <div class="dialog-kicker">运行环境</div>
         <h2>Claude Code 配置</h2>
         <form id="claude-config-form" onsubmit="handleClaudeConfig(event)">
           <label for="cc-base-url">ANTHROPIC_BASE_URL <span class="required">*</span></label>
@@ -63,6 +65,7 @@
 
     <div id="plugin-overlay" style="display:none">
       <div id="plugin-box">
+        <div class="dialog-kicker">扩展</div>
         <h2>插件安装</h2>
         <div class="plugin-item">
           <div class="plugin-info">
@@ -77,22 +80,44 @@
 
     <div id="app-container" style="display:none">
       <div id="sidebar">
+        <div id="sidebar-titlebar">
+          <div class="brand-mark">TC</div>
+          <div class="brand-copy">
+            <span class="brand-name">TermCloud</span>
+            <span class="brand-subtitle">Web Linux Console</span>
+          </div>
+        </div>
         <div id="sidebar-header">
-          <span class="path-text" id="current-path">/</span>
-          <button id="refresh-btn" title="刷新文件列表">🔄</button>
+          <div class="path-stack">
+            <span class="section-label">文件</span>
+            <span class="path-text" id="current-path">/</span>
+          </div>
+          <button id="refresh-btn" title="刷新文件列表" aria-label="刷新文件列表">⟳</button>
         </div>
         <div id="file-list">
           <div class="file-list-loading">加载中...</div>
         </div>
         <div id="sidebar-footer">
-          <button id="claude-config-btn" title="配置 Claude Code">⚙️ Claude Code 配置</button>
-          <button id="plugin-install-btn" title="安装插件">📦 插件安装</button>
+          <button id="claude-config-btn" title="配置 Claude Code">⚙ Claude Code 配置</button>
+          <button id="plugin-install-btn" title="安装插件">▣ 插件安装</button>
         </div>
 
       </div>
 
       <div id="main-area">
-        <div id="terminal"></div>
+        <div id="workspace-topbar">
+          <div class="terminal-title">
+            <span class="terminal-glyph">⌁</span>
+            <span>终端</span>
+          </div>
+          <div id="connection-status" class="connection-status is-idle">
+            <span class="status-dot"></span>
+            <span id="connection-status-text">未连接</span>
+          </div>
+        </div>
+        <div id="terminal-panel">
+          <div id="terminal"></div>
+        </div>
       </div>
     </div>
 
@@ -166,6 +191,14 @@
       });
 
       let pendingCmd = null;
+
+      function setConnectionStatus(text, state) {
+        const status = document.getElementById("connection-status");
+        const label = document.getElementById("connection-status-text");
+        if (!status || !label) return;
+        status.className = `connection-status is-${state}`;
+        label.textContent = text;
+      }
 
       function sendToTerminal(cmd) {
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -332,6 +365,7 @@
       }
 
       function connectWebSocket() {
+        setConnectionStatus("连接中", "connecting");
         const protocol = location.protocol === "https:" ? "wss:" : "ws:";
         const token = getToken();
         socket = new WebSocket(
@@ -340,6 +374,7 @@
         socket.binaryType = "arraybuffer";
 
         socket.onopen = () => {
+          setConnectionStatus("已连接", "connected");
           const dims = fitAddon.proposeDimensions();
           if (dims) {
             sendResize(dims.cols, dims.rows);
@@ -370,9 +405,11 @@
 
         socket.onclose = (event) => {
           if (event.code === 4001 || event.code === 4003) {
+            setConnectionStatus("未连接", "idle");
             clearToken();
             showLogin();
           } else {
+            setConnectionStatus("重连中", "connecting");
             terminal.writeln("\r\nConnection lost, reconnecting...");
             setTimeout(() => {
               if (getToken()) connectWebSocket();
@@ -381,6 +418,7 @@
         };
 
         socket.onerror = () => {
+          setConnectionStatus("连接错误", "error");
           terminal.writeln("\r\nConnection error");
         };
       }
@@ -454,7 +492,7 @@
             const fragment = document.createDocumentFragment();
 
             if (data.dir !== data.workDir) {
-              fragment.appendChild(createFileItemParent(data.dir));
+              fragment.appendChild(createFileItemParent(pathDir(data.dir)));
             }
 
             const sorted = data.entries.sort((a, b) => {
@@ -485,19 +523,19 @@
 
       function createFileItemParent(parentDir) {
         const item = document.createElement("div");
-        item.className = "file-item";
-        item.innerHTML = '<span class="icon">📁</span><span class="name">..</span>';
+        item.className = "file-item is-parent";
+        item.innerHTML = '<span class="icon">↰</span><span class="name">..</span>';
         item.addEventListener("click", () => navigateTo(parentDir));
         return item;
       }
 
       function createFileItem(entry, fullPath, parentDir) {
         const item = document.createElement("div");
-        item.className = "file-item";
+        item.className = `file-item ${entry.isDirectory ? "is-dir" : "is-file"}`;
 
         const icon = document.createElement("span");
         icon.className = "icon";
-        icon.textContent = entry.isDirectory ? "📁" : "📄";
+        icon.textContent = entry.isDirectory ? "▸" : "•";
         item.appendChild(icon);
 
         const name = document.createElement("span");
@@ -509,6 +547,11 @@
           item.addEventListener("click", () => navigateTo(fullPath));
         } else {
           item.addEventListener("click", () => navigateTo(pathDir(fullPath)));
+
+          const meta = document.createElement("span");
+          meta.className = "file-meta";
+          meta.textContent = formatBytes(entry.size);
+          item.appendChild(meta);
 
           const deleteBtn = document.createElement("button");
           deleteBtn.className = "delete-btn";
@@ -526,6 +569,19 @@
         }
 
         return item;
+      }
+
+      function formatBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes < 0) return "";
+        if (bytes < 1024) return `${bytes} B`;
+        const units = ["KB", "MB", "GB", "TB"];
+        let value = bytes / 1024;
+        let unit = units[0];
+        for (let i = 1; i < units.length && value >= 1024; i++) {
+          value /= 1024;
+          unit = units[i];
+        }
+        return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
       }
 
       function navigateTo(dir) {
