@@ -128,14 +128,8 @@ body {
   color: #ccc;
   display: flex;
   flex-direction: column;
-  transform: translateX(0);
-  transition: transform 0.25s ease;
   overflow: hidden;
   border-right: 1px solid #333;
-}
-
-#sidebar.hidden {
-  transform: translateX(-260px);
 }
 
 #sidebar-header {
@@ -257,32 +251,6 @@ body {
   display: flex;
   position: relative;
   min-width: 0;
-}
-
-#toggle-btn {
-  position: absolute;
-  left: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 10;
-  background: #1a1a2e;
-  border: 1px solid #333;
-  border-left: none;
-  border-radius: 0 4px 4px 0;
-  color: #aaa;
-  cursor: pointer;
-  font-size: 14px;
-  padding: 8px 5px;
-  display: none;
-  transition: color 0.15s;
-}
-
-#toggle-btn:hover {
-  color: #fff;
-}
-
-#sidebar.hidden ~ #main-area #toggle-btn {
-  display: block;
 }
 
 #terminal {

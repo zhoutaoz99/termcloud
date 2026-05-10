@@ -33,7 +33,6 @@
         <div id="sidebar-header">
           <span class="path-text" id="current-path">/</span>
           <button id="refresh-btn" title="刷新文件列表">🔄</button>
-          <button id="hide-sidebar-btn" title="隐藏侧栏">◀</button>
         </div>
         <div id="file-list">
           <div class="file-list-loading">加载中...</div>
@@ -42,7 +41,6 @@
       </div>
 
       <div id="main-area">
-        <button id="toggle-btn" title="显示文件栏">▶</button>
         <div id="terminal"></div>
       </div>
     </div>
@@ -282,28 +280,6 @@
 
       window.addEventListener("resize", fitTerminal);
 
-      // ── sidebar toggle ──
-      const sidebarEl = document.getElementById("sidebar");
-      sidebarEl.addEventListener("transitionend", () => {
-        if (sidebarEl.classList.contains("hidden")) {
-          sidebarEl.style.width = "0";
-        }
-      });
-
-      function toggleSidebar() {
-        const hiding = !sidebarEl.classList.contains("hidden");
-        if (hiding) {
-          sidebarEl.classList.add("hidden");
-        } else {
-          sidebarEl.style.width = "";
-          sidebarEl.classList.remove("hidden");
-        }
-        // refit terminal after transition
-        setTimeout(fitTerminal, 300);
-      }
-
-      document.getElementById("hide-sidebar-btn").addEventListener("click", toggleSidebar);
-      document.getElementById("toggle-btn").addEventListener("click", toggleSidebar);
       document.getElementById("refresh-btn").addEventListener("click", refreshFiles);
 
       // ── file browser ──
