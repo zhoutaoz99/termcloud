@@ -84,10 +84,10 @@ http://<server-ip>:3000
 
 ```bash
 # 使用默认凭据（admin/admin）
-docker compose up -d
+docker-compose up -d
 
 # 自定义用户名和密码
-USERNAME=myuser PASSWORD=mypassword docker compose up -d
+USERNAME=myuser PASSWORD=mypassword docker-compose up -d
 ```
 
 访问 `http://<server-ip>:3000` 即可使用。
