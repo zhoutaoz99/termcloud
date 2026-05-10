@@ -128,14 +128,14 @@ body {
   color: #ccc;
   display: flex;
   flex-direction: column;
-  transition: width 0.25s ease;
+  transform: translateX(0);
+  transition: transform 0.25s ease;
   overflow: hidden;
   border-right: 1px solid #333;
 }
 
 #sidebar.hidden {
-  width: 0;
-  border-right: none;
+  transform: translateX(-260px);
 }
 
 #sidebar-header {

@@ -89,7 +89,6 @@ function createTerminalEnv() {
 }
 
 // ── middleware ──
-app.use(express.json());
 app.use(compression());
 app.use(express.static(path.join(__dirname, "public"), {
   maxAge: "7d",
@@ -104,12 +103,19 @@ app.use(express.static(path.join(__dirname, "public"), {
 
 // auth middleware
 function requireAuth(req, res, next) {
+  let token = null;
+
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.slice(7);
+  } else if (req.query && req.query.token) {
+    token = req.query.token;
+  }
+
+  if (!token) {
     return res.status(401).json({ error: "unauthorized" });
   }
 
-  const token = authHeader.slice(7);
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded;
@@ -119,8 +125,42 @@ function requireAuth(req, res, next) {
   }
 }
 
+// ── login rate limiter ──
+const loginAttempts = new Map();
+const RATE_LIMIT_MAX = 5;
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+
+function checkLoginRate(req, res, next) {
+  const ip = req.ip || req.socket.remoteAddress || "unknown";
+  const now = Date.now();
+  let entry = loginAttempts.get(ip);
+
+  if (entry && now - entry.windowStart > RATE_LIMIT_WINDOW) {
+    entry = null;
+  }
+  if (!entry) {
+    entry = { windowStart: now, count: 0 };
+    loginAttempts.set(ip, entry);
+  }
+
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) {
+    return res.status(429).json({ error: "too many attempts, try again later" });
+  }
+
+  next();
+}
+
+// Cleanup stale rate-limit entries every 5 minutes
+setInterval(() => {
+  const cutoff = Date.now() - RATE_LIMIT_WINDOW;
+  for (const [ip, entry] of loginAttempts) {
+    if (entry.windowStart < cutoff) loginAttempts.delete(ip);
+  }
+}, 300000).unref();
+
 // ── login endpoint ──
-app.post("/api/login", (req, res) => {
+app.post("/api/login", express.json(), checkLoginRate, (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -328,7 +368,15 @@ function getOrCreateSession(username) {
     batchPending: false
   };
 
+  // Strip DA (Device Attributes) responses so they don't leak as visible text.
+  // xterm.js sends \x1b[c (Primary DA) on startup; macOS PTY responds with
+  // \x1b[/1;2c (VT102-style with '/' intermediate), which xterm.js doesn't consume.
+  const DA_RESPONSE_RE = /\x1b\[[\x20-\x2f]*[\x30-\x3f]*c/g;
+
   ptyProcess.onData((data) => {
+    data = data.replace(DA_RESPONSE_RE, "");
+    if (!data) return;
+
     session.buffer.push(data);
 
     if (!session.batchPending) {
