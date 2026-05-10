@@ -359,9 +359,13 @@ body {
   padding: 8px 10px;
   border-top: 1px solid #333;
   background: #16213e;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-#poe-config-btn {
+#poe-config-btn,
+#plugin-install-btn {
   width: 100%;
   padding: 7px 0;
   background: #0f3460;
@@ -373,9 +377,101 @@ body {
   transition: color 0.15s, background 0.15s;
 }
 
-#poe-config-btn:hover {
+#poe-config-btn:hover,
+#plugin-install-btn:hover {
   color: #fff;
   background: #1a4a8a;
+}
+
+/* ── Plugin install overlay ── */
+#plugin-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+#plugin-box {
+  background: #1a1a2e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 28px 24px;
+  width: 360px;
+  box-sizing: border-box;
+}
+
+#plugin-box h2 {
+  margin: 0 0 16px;
+  color: #ddd;
+  font-size: 18px;
+  text-align: center;
+  font-weight: 500;
+}
+
+.plugin-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  background: #0e0e1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.plugin-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.plugin-name {
+  color: #ddd;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.plugin-desc {
+  color: #888;
+  font-size: 12px;
+}
+
+.plugin-install-action {
+  padding: 6px 16px;
+  background: #0f3460;
+  color: #ddd;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.plugin-install-action:hover {
+  background: #1a4a8a;
+}
+
+.plugin-close-btn {
+  width: 100%;
+  padding: 8px;
+  background: none;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #888;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.plugin-close-btn:hover {
+  color: #bbb;
+  border-color: #555;
 }
 
 /* ── main area ── */

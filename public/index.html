@@ -42,6 +42,20 @@
       </div>
     </div>
 
+    <div id="plugin-overlay" style="display:none">
+      <div id="plugin-box">
+        <h2>插件安装</h2>
+        <div class="plugin-item">
+          <div class="plugin-info">
+            <span class="plugin-name">Claude Code</span>
+            <span class="plugin-desc">Anthropic 官方 CLI 工具</span>
+          </div>
+          <button class="plugin-install-action" data-cmd="npm install -g @anthropic-ai/claude-code">安装</button>
+        </div>
+        <button type="button" class="plugin-close-btn" onclick="closePluginOverlay()">关闭</button>
+      </div>
+    </div>
+
     <div id="app-container" style="display:none">
       <div id="sidebar">
         <div id="sidebar-header">
@@ -53,6 +67,7 @@
         </div>
         <div id="sidebar-footer">
           <button id="poe-config-btn" title="配置 Poe API Key">⚙️ Poe 配置</button>
+          <button id="plugin-install-btn" title="安装插件">📦 插件安装</button>
         </div>
 
       </div>
@@ -100,6 +115,27 @@
         document.getElementById("poe-key").value = "";
         document.getElementById("poe-error").textContent = "";
         document.getElementById("poe-key").focus();
+      });
+
+      document.getElementById("plugin-install-btn").addEventListener("click", function () {
+        document.getElementById("plugin-overlay").style.display = "flex";
+      });
+
+      window.closePluginOverlay = function () {
+        document.getElementById("plugin-overlay").style.display = "none";
+      };
+
+      document.querySelectorAll(".plugin-install-action").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var cmd = this.getAttribute("data-cmd");
+          if (!cmd || !socket || socket.readyState !== WebSocket.OPEN) return;
+          var payload = textEncoder.encode(cmd + "\n");
+          var frame = new Uint8Array(1 + payload.length);
+          frame[0] = MSG_INPUT;
+          frame.set(payload, 1);
+          socket.send(frame.buffer);
+          document.getElementById("plugin-overlay").style.display = "none";
+        });
       });
 
       function showApp() {
