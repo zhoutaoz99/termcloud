@@ -245,9 +245,6 @@
           frame.set(payload, 1);
           socket.send(frame.buffer);
         }
-        if (data === "\r" || data.includes("\r")) {
-          scheduleAutoRefresh();
-        }
       });
 
       function sendResize(cols, rows) {
@@ -300,7 +297,6 @@
         } else {
           sidebarEl.style.width = "";
           sidebarEl.classList.remove("hidden");
-          loadFiles(currentDir);
         }
         // refit terminal after transition
         setTimeout(fitTerminal, 300);
@@ -411,15 +407,6 @@
 
       function refreshFiles() {
         loadFiles(currentDir);
-      }
-
-      let refreshDebounce = null;
-      function scheduleAutoRefresh() {
-        if (document.getElementById("sidebar").classList.contains("hidden")) return;
-        if (refreshDebounce) clearTimeout(refreshDebounce);
-        refreshDebounce = setTimeout(() => {
-          loadFiles(currentDir);
-        }, 1000);
       }
 
       function downloadItem(fullPath) {
