@@ -21,15 +21,16 @@ function run(cmd, args) {
 run('node', ['--check', 'server.js']);
 
 const html = fs.readFileSync(path.join(rootDir, 'public', 'index.html'), 'utf8');
+const css = fs.readFileSync(path.join(rootDir, 'public', 'style.css'), 'utf8');
 assert(html.includes('/ws/terminal'), 'index.html must connect to /ws/terminal');
 assert(html.includes('download?path='), 'index.html must include download action');
 assert(html.includes('/vendor/addon-unicode11'), 'index.html must load xterm unicode width addon');
 assert(html.includes('terminal.unicode.activeVersion = "11"'), 'index.html must enable Unicode 11 width handling');
-assert(html.includes('font-variant-ligatures: none'), 'index.html must disable terminal font ligatures');
+assert(css.includes('font-variant-ligatures: none'), 'style.css must disable terminal font ligatures');
 assert(html.includes('rescaleOverlappingGlyphs: true'), 'index.html must prevent wide punctuation glyph overlap');
-assert(html.includes('font-family: "TermMono"'), 'index.html must declare the TermMono unicode-range @font-face family');
-assert(!html.includes('unicode-range: U+2E80'), 'CJK @font-face must NOT declare unicode-range (it must act as catch-all for TermMono)');
-assert(html.includes('local("Sarasa Mono SC")'), 'CJK @font-face must prioritize CJK monospace fonts for correct glyph width');
+assert(css.includes('font-family: "TermMono"'), 'style.css must declare the TermMono unicode-range @font-face family');
+assert(!css.includes('unicode-range: U+2E80'), 'CJK @font-face must NOT declare unicode-range (it must act as catch-all for TermMono)');
+assert(css.includes('local("Sarasa Mono SC")'), 'CJK @font-face must prioritize CJK monospace fonts for correct glyph width');
 assert(html.includes('allowProposedApi: true'), 'index.html must set allowProposedApi: true for xterm Unicode11 addon');
 assert(html.includes('binaryType = "arraybuffer"'), 'index.html must use binary WebSocket protocol');
 assert(html.includes('MSG_OUTPUT'), 'index.html must define binary protocol constants');

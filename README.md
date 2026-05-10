@@ -77,6 +77,11 @@ http://<server-ip>:3000
 |------|------|--------|
 | `PORT` | 服务监听端口 | `3000` |
 | `TERMCLOUD_UTF8_LOCALE` | PTY 的 UTF-8 locale | `en_US.UTF-8` (macOS) / `C.UTF-8` (Linux) |
+| `TERMCLOUD_REPLAY_BUFFER_BYTES` | 终端重连回放缓冲区上限 | `1048576` |
+| `TERMCLOUD_REPLAY_FRAME_BYTES` | 重连回放单帧目标大小 | `131072` |
+| `TERMCLOUD_WS_BACKPRESSURE_LIMIT_BYTES` | 单客户端 WebSocket 待发送缓冲上限 | `4194304` |
+| `TERMCLOUD_WS_COMPRESSION_THRESHOLD_BYTES` | WebSocket 压缩阈值 | `1024` |
+| `TERMCLOUD_SESSION_IDLE_TIMEOUT_MS` | 无客户端 PTY 空闲回收时间 | `600000` |
 
 ### Docker 部署
 
@@ -99,6 +104,11 @@ USERNAME=myuser PASSWORD=mypassword docker-compose up -d
 | `USERNAME` | 登录用户名 | `admin` |
 | `PASSWORD` | 登录密码 | `admin` |
 | `PORT` | 宿主机映射端口 | `3000` |
+| `TERMCLOUD_REPLAY_BUFFER_BYTES` | 终端重连回放缓冲区上限 | `262144` |
+| `TERMCLOUD_REPLAY_FRAME_BYTES` | 重连回放单帧目标大小 | `65536` |
+| `TERMCLOUD_WS_BACKPRESSURE_LIMIT_BYTES` | 单客户端 WebSocket 待发送缓冲上限 | `1048576` |
+| `TERMCLOUD_WS_COMPRESSION_THRESHOLD_BYTES` | WebSocket 压缩阈值 | `2048` |
+| `TERMCLOUD_SESSION_IDLE_TIMEOUT_MS` | 无客户端 PTY 空闲回收时间 | `180000` |
 
 **数据持久化：** 用户文件存储在 Docker volume `termcloud-data` 中，删除容器不会丢失数据。
 

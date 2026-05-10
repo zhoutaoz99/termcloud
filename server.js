@@ -373,8 +373,9 @@ class RingBuffer {
   }
 
   push(data) {
-    this.chunks.push(data);
-    this.totalSize += data.length;
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
+    this.chunks.push(chunk);
+    this.totalSize += chunk.length;
     this._evict();
   }
 
@@ -406,8 +407,23 @@ const MSG_RESIZE = 0x03;
 const MSG_CONNECTED = 0x04;
 const MSG_BATCH_OUTPUT = 0x05;
 
+function getPositiveIntEnv(name, fallback) {
+  const value = Number.parseInt(process.env[name], 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+const REPLAY_BUFFER_BYTES = getPositiveIntEnv("TERMCLOUD_REPLAY_BUFFER_BYTES", 1024 * 1024);
+const REPLAY_FRAME_BYTES = getPositiveIntEnv("TERMCLOUD_REPLAY_FRAME_BYTES", 128 * 1024);
+const WS_BACKPRESSURE_LIMIT_BYTES = getPositiveIntEnv("TERMCLOUD_WS_BACKPRESSURE_LIMIT_BYTES", 4 * 1024 * 1024);
+const WS_COMPRESSION_THRESHOLD_BYTES = getPositiveIntEnv("TERMCLOUD_WS_COMPRESSION_THRESHOLD_BYTES", 1024);
+const SESSION_IDLE_TIMEOUT_MS = getPositiveIntEnv("TERMCLOUD_SESSION_IDLE_TIMEOUT_MS", 10 * 60 * 1000);
+
+function toPayloadBuffer(data) {
+  return Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
+}
+
 function encodeOutput(data) {
-  const payload = Buffer.from(data, "utf8");
+  const payload = toPayloadBuffer(data);
   const frame = Buffer.alloc(1 + payload.length);
   frame[0] = MSG_OUTPUT;
   payload.copy(frame, 1);
@@ -415,7 +431,7 @@ function encodeOutput(data) {
 }
 
 function encodeBatchOutput(chunks) {
-  const bufs = chunks.map(s => Buffer.from(s, "utf8"));
+  const bufs = chunks.map(toPayloadBuffer);
   const totalLen = bufs.reduce((sum, b) => sum + b.length, 0);
   const frame = Buffer.alloc(1 + totalLen);
   frame[0] = MSG_BATCH_OUTPUT;
@@ -444,12 +460,14 @@ function getOrCreateSession(username) {
   });
 
   const session = {
+    username,
     pty: ptyProcess,
-    buffer: new RingBuffer(1048576),
+    buffer: new RingBuffer(REPLAY_BUFFER_BYTES),
     clients: new Set(),
     exited: false,
     batchAccumulator: [],
-    batchPending: false
+    batchPending: false,
+    idleTimer: null
   };
 
   // Strip DA (Device Attributes) responses so they don't leak as visible text.
@@ -461,18 +479,25 @@ function getOrCreateSession(username) {
     data = data.replace(DA_RESPONSE_RE, "");
     if (!data) return;
 
-    session.buffer.push(data);
+    const chunk = Buffer.from(data, "utf8");
+    session.buffer.push(chunk);
+
+    if (session.clients.size === 0) return;
 
     if (!session.batchPending) {
       session.batchPending = true;
       session.batchAccumulator = [];
     }
-    session.batchAccumulator.push(data);
+    session.batchAccumulator.push(chunk);
+    startBatchFlush();
   });
 
   ptyProcess.onExit(() => {
     session.exited = true;
-    sessions.delete(username);
+    cancelSessionIdleCleanup(session);
+    if (sessions.get(username) === session) {
+      sessions.delete(username);
+    }
     for (const ws of session.clients) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.close(4001, "process exited");
@@ -481,8 +506,100 @@ function getOrCreateSession(username) {
   });
 
   sessions.set(username, session);
-  startBatchFlush();
   return session;
+}
+
+function clearPendingBatch(session) {
+  session.batchPending = false;
+  session.batchAccumulator = [];
+}
+
+function cancelSessionIdleCleanup(session) {
+  if (!session.idleTimer) return;
+  clearTimeout(session.idleTimer);
+  session.idleTimer = null;
+}
+
+function scheduleSessionIdleCleanup(session) {
+  if (session.exited || session.clients.size > 0 || session.idleTimer) return;
+
+  clearPendingBatch(session);
+
+  session.idleTimer = setTimeout(() => {
+    session.idleTimer = null;
+    if (session.exited || session.clients.size > 0) return;
+
+    session.exited = true;
+    clearPendingBatch(session);
+    if (sessions.get(session.username) === session) {
+      sessions.delete(session.username);
+    }
+
+    try {
+      session.pty.kill();
+    } catch {
+      // PTY may already be closed.
+    }
+  }, SESSION_IDLE_TIMEOUT_MS);
+  session.idleTimer.unref();
+}
+
+function detachClient(session, ws) {
+  const removed = session.clients.delete(ws);
+  if (!removed) return;
+
+  if (session.clients.size === 0) {
+    scheduleSessionIdleCleanup(session);
+  }
+}
+
+function closeSlowClient(session, ws) {
+  detachClient(session, ws);
+  try {
+    ws.close(4002, "client too slow");
+  } catch {
+    ws.terminate();
+  }
+}
+
+function sendFrameToClient(session, ws, frame) {
+  if (ws.readyState !== WebSocket.OPEN) {
+    detachClient(session, ws);
+    return false;
+  }
+
+  if (ws.bufferedAmount + frame.length > WS_BACKPRESSURE_LIMIT_BYTES) {
+    closeSlowClient(session, ws);
+    return false;
+  }
+
+  ws.send(frame, (err) => {
+    if (err) detachClient(session, ws);
+  });
+  return true;
+}
+
+function sendReplayBuffer(session, ws) {
+  let batch = [];
+  let batchSize = 0;
+
+  const flush = () => {
+    if (batch.length === 0) return true;
+    const frame = batch.length === 1 ? encodeOutput(batch[0]) : encodeBatchOutput(batch);
+    batch = [];
+    batchSize = 0;
+    return sendFrameToClient(session, ws, frame);
+  };
+
+  for (const chunk of session.buffer.iterChunks()) {
+    if (batchSize > 0 && batchSize + chunk.length > REPLAY_FRAME_BYTES) {
+      if (!flush()) return;
+    }
+    batch.push(chunk);
+    batchSize += chunk.length;
+  }
+
+  flush();
 }
 
 // ── batch flush (16ms ≈ 60Hz) ──
@@ -492,22 +609,26 @@ function startBatchFlush() {
   if (batchFlushTimer) return;
   batchFlushTimer = setInterval(() => {
     for (const session of sessions.values()) {
-      if (!session.batchPending || session.clients.size === 0) continue;
+      if (!session.batchPending) continue;
+
       const acc = session.batchAccumulator;
-      session.batchPending = false;
-      session.batchAccumulator = [];
+      clearPendingBatch(session);
+
+      if (acc.length === 0 || session.clients.size === 0) continue;
 
       const frame = acc.length === 1
         ? encodeOutput(acc[0])
         : encodeBatchOutput(acc);
 
       for (const ws of session.clients) {
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(frame);
-        }
+        sendFrameToClient(session, ws, frame);
       }
     }
-    if (sessions.size === 0) {
+
+    const hasPendingWork = [...sessions.values()].some(
+      (session) => session.batchPending && session.clients.size > 0
+    );
+    if (!hasPendingWork) {
       clearInterval(batchFlushTimer);
       batchFlushTimer = null;
     }
@@ -519,8 +640,11 @@ const wss = new WebSocket.Server({
   server,
   path: "/ws/terminal",
   perMessageDeflate: {
-    zlibDeflateOptions: { level: 1 },
-    threshold: 64
+    zlibDeflateOptions: { level: 1, memLevel: 3 },
+    serverNoContextTakeover: true,
+    clientNoContextTakeover: true,
+    concurrencyLimit: 2,
+    threshold: WS_COMPRESSION_THRESHOLD_BYTES
   },
   verifyClient: (info, callback) => {
     const url = new URL(info.req.url, "http://localhost");
@@ -543,6 +667,7 @@ wss.on("connection", (ws, req) => {
   const session = getOrCreateSession(username);
 
   session.clients.add(ws);
+  cancelSessionIdleCleanup(session);
 
   const isResuming = session.buffer.length > 0;
   const connectedFrame = Buffer.alloc(2);
@@ -551,8 +676,7 @@ wss.on("connection", (ws, req) => {
   ws.send(connectedFrame);
 
   if (session.buffer.length > 0) {
-    const chunks = [...session.buffer.iterChunks()];
-    ws.send(chunks.length === 1 ? encodeOutput(chunks[0]) : encodeBatchOutput(chunks));
+    sendReplayBuffer(session, ws);
   }
 
   ws.on("message", (message) => {
@@ -579,11 +703,11 @@ wss.on("connection", (ws, req) => {
   });
 
   ws.on("close", () => {
-    session.clients.delete(ws);
+    detachClient(session, ws);
   });
 
   ws.on("error", () => {
-    session.clients.delete(ws);
+    detachClient(session, ws);
   });
 });
 

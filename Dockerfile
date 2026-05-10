@@ -1,26 +1,50 @@
-FROM node:24-slim
+FROM node:24-slim AS deps
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3 \
-    vim-tiny \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm_config_build_from_source=true npm ci --omit=dev --no-audit --no-fund \
+    && npm cache clean --force \
+    && rm -rf node_modules/node-pty/prebuilds \
+              node_modules/node-pty/src \
+              node_modules/node-pty/deps \
+              node_modules/node-pty/third_party \
+    && find node_modules/node-pty/lib -name "*.map" -delete \
+    && find node_modules/node-pty/lib -name "*.test.js" -delete \
+    && find node_modules/node-pty/lib -name "*.test.js.map" -delete
 
+FROM node:24-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV TERMCLOUD_REPLAY_BUFFER_BYTES=262144
+ENV TERMCLOUD_REPLAY_FRAME_BYTES=65536
+ENV TERMCLOUD_WS_BACKPRESSURE_LIMIT_BYTES=1048576
+ENV TERMCLOUD_WS_COMPRESSION_THRESHOLD_BYTES=2048
+ENV TERMCLOUD_SESSION_IDLE_TIMEOUT_MS=180000
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json package-lock.json ./
 COPY server.js ./
 COPY public/ ./public/
-COPY scripts/ ./scripts/
 COPY docker-entrypoint.sh ./
 RUN chmod +x docker-entrypoint.sh
 
 RUN mkdir -p /data/users
 
-ENV PORT=3000
 EXPOSE 3000
 
 ENTRYPOINT ["./docker-entrypoint.sh"]
-CMD ["node", "server.js"]
+CMD ["node", "--max-old-space-size=128", "server.js"]

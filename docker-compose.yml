@@ -2,11 +2,18 @@ services:
   termcloud:
     build: .
     container_name: termcloud
+    init: true
     ports:
       - "${PORT:-3000}:3000"
     environment:
       - USERNAME=${USERNAME:-admin}
       - PASSWORD=${PASSWORD:-admin}
+      - TERMCLOUD_REPLAY_BUFFER_BYTES=${TERMCLOUD_REPLAY_BUFFER_BYTES:-262144}
+      - TERMCLOUD_REPLAY_FRAME_BYTES=${TERMCLOUD_REPLAY_FRAME_BYTES:-65536}
+      - TERMCLOUD_WS_BACKPRESSURE_LIMIT_BYTES=${TERMCLOUD_WS_BACKPRESSURE_LIMIT_BYTES:-1048576}
+      - TERMCLOUD_WS_COMPRESSION_THRESHOLD_BYTES=${TERMCLOUD_WS_COMPRESSION_THRESHOLD_BYTES:-2048}
+      - TERMCLOUD_SESSION_IDLE_TIMEOUT_MS=${TERMCLOUD_SESSION_IDLE_TIMEOUT_MS:-180000}
+    pids_limit: 256
     volumes:
       - termcloud-data:/data
     restart: unless-stopped
