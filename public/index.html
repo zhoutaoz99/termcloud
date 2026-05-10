@@ -138,6 +138,17 @@
         });
       });
 
+      let pendingCmd = null;
+
+      function sendToTerminal(cmd) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        var payload = textEncoder.encode(cmd + "\n");
+        var frame = new Uint8Array(1 + payload.length);
+        frame[0] = MSG_INPUT;
+        frame.set(payload, 1);
+        socket.send(frame.buffer);
+      }
+
       function showApp() {
         document.getElementById("login-overlay").style.display = "none";
         document.getElementById("poe-overlay").style.display = "none";
@@ -190,7 +201,12 @@
           .then((r) => r.json())
           .then((data) => {
             if (data.ok) {
+              pendingCmd = "source ~/.bashrc";
               showApp();
+              // 终端已初始化时 WebSocket 不会重新 onopen，需主动发送
+              if (socket && socket.readyState === WebSocket.OPEN) {
+                setTimeout(() => { sendToTerminal(pendingCmd); pendingCmd = null; }, 500);
+              }
             } else {
               errorEl.textContent = data.error || "保存失败";
             }
@@ -297,6 +313,9 @@
           const dims = fitAddon.proposeDimensions();
           if (dims) {
             sendResize(dims.cols, dims.rows);
+          }
+          if (pendingCmd) {
+            setTimeout(() => { sendToTerminal(pendingCmd); pendingCmd = null; }, 500);
           }
         };
 
