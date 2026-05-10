@@ -114,8 +114,8 @@ body {
   min-height: 18px;
 }
 
-/* ── Poe config overlay ── */
-#poe-overlay {
+/* ── Claude Code config overlay ── */
+#claude-config-overlay {
   position: fixed;
   top: 0;
   left: 0;
@@ -128,42 +128,42 @@ body {
   z-index: 1000;
 }
 
-#poe-box {
+#claude-config-box {
   background: #1a1a2e;
   border: 1px solid #333;
   border-radius: 8px;
   padding: 36px 32px;
-  width: 380px;
+  width: 420px;
+  max-height: 90vh;
+  overflow-y: auto;
   box-sizing: border-box;
 }
 
-#poe-box h2 {
-  margin: 0 0 8px;
+#claude-config-box h2 {
+  margin: 0 0 16px;
   color: #ddd;
   font-size: 20px;
   text-align: center;
   font-weight: 500;
 }
 
-.poe-desc {
-  color: #bbb;
-  font-size: 14px;
-  text-align: center;
-  margin: 0 0 20px;
-  line-height: 1.5;
-}
-
-#poe-box label {
+#claude-config-box label {
   display: block;
   color: #ccc;
   font-size: 13px;
   margin-bottom: 4px;
 }
 
-#poe-key {
+.required {
+  color: #e74c3c;
+}
+
+#claude-config-box input[type="text"],
+#claude-config-box input[type="password"],
+#claude-config-box select {
   width: 100%;
   padding: 10px 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   border: 1px solid #333;
   border-radius: 4px;
   background: #0e0e1a;
@@ -174,15 +174,30 @@ body {
   font-family: monospace;
 }
 
-#poe-key:focus {
+#claude-config-box input:focus,
+#claude-config-box select:focus {
   border-color: #0f3460;
 }
 
-#poe-key::placeholder {
+#claude-config-box input::placeholder {
   color: #666;
 }
 
-#poe-form button[type="submit"] {
+#claude-config-box select {
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23888' fill='none' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+}
+
+#claude-config-box select option {
+  background: #1a1a2e;
+  color: #ddd;
+}
+
+#claude-config-form button[type="submit"] {
   width: 100%;
   padding: 10px;
   background: #0f3460;
@@ -194,7 +209,7 @@ body {
   margin-top: 4px;
 }
 
-#poe-form button[type="submit"]:hover {
+#claude-config-form button[type="submit"]:hover {
   background: #1a4a8a;
 }
 
@@ -215,7 +230,7 @@ body {
   border-color: #555;
 }
 
-#poe-error {
+#claude-config-error {
   color: #e74c3c;
   font-size: 13px;
   text-align: center;
@@ -364,7 +379,7 @@ body {
   gap: 6px;
 }
 
-#poe-config-btn,
+#claude-config-btn,
 #plugin-install-btn {
   width: 100%;
   padding: 7px 0;
@@ -377,7 +392,7 @@ body {
   transition: color 0.15s, background 0.15s;
 }
 
-#poe-config-btn:hover,
+#claude-config-btn:hover,
 #plugin-install-btn:hover {
   color: #fff;
   background: #1a4a8a;

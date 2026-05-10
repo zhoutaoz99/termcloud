@@ -68,10 +68,19 @@ function getDefaultUtf8Locale() {
   return process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 }
 
-const POE_KEY_FILE = path.join(USER_WORK_DIR, ".poe_api_key");
+const CLAUDE_CONFIG_FILE = path.join(USER_WORK_DIR, ".claude_code_config.json");
 
-function isPoeConfigured() {
-  return fs.existsSync(POE_KEY_FILE);
+function isClaudeConfigured() {
+  return fs.existsSync(CLAUDE_CONFIG_FILE);
+}
+
+function getClaudeConfig() {
+  if (!fs.existsSync(CLAUDE_CONFIG_FILE)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(CLAUDE_CONFIG_FILE, "utf8"));
+  } catch {
+    return {};
+  }
 }
 
 function createTerminalEnv() {
@@ -83,11 +92,14 @@ function createTerminalEnv() {
     HOME: USER_WORK_DIR
   };
 
-  if (isPoeConfigured()) {
-    const apiKey = fs.readFileSync(POE_KEY_FILE, "utf8").trim();
-    env.ANTHROPIC_BASE_URL = "https://api.poe.com";
-    env.ANTHROPIC_AUTH_TOKEN = apiKey;
+  if (isClaudeConfigured()) {
+    const cfg = getClaudeConfig();
+    if (cfg.baseUrl) env.ANTHROPIC_BASE_URL = cfg.baseUrl;
+    if (cfg.authToken) env.ANTHROPIC_AUTH_TOKEN = cfg.authToken;
     env.ANTHROPIC_API_KEY = "";
+    if (cfg.model) env.ANTHROPIC_MODEL = cfg.model;
+    if (cfg.haikuModel) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = cfg.haikuModel;
+    if (cfg.effort) env.CLAUDE_CODE_EFFORT_LEVEL = cfg.effort;
   }
 
   const activeLocale = env.LC_ALL || env.LC_CTYPE || env.LANG;
@@ -191,35 +203,57 @@ app.post("/api/login", express.json(), checkLoginRate, (req, res) => {
   }
 
   const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: "24h" });
-  res.json({ token, poeConfigured: isPoeConfigured() });
+  res.json({ token, claudeConfigured: isClaudeConfigured() });
 });
 
-// ── Poe config endpoints ──
-app.get("/api/poe-status", requireAuth, (req, res) => {
-  res.json({ configured: isPoeConfigured() });
+// ── Claude Code config endpoints ──
+app.get("/api/claude-config", requireAuth, (req, res) => {
+  const cfg = getClaudeConfig();
+  res.json({
+    configured: isClaudeConfigured(),
+    baseUrl: cfg.baseUrl || "",
+    authToken: cfg.authToken || "",
+    model: cfg.model || "",
+    haikuModel: cfg.haikuModel || "",
+    effort: cfg.effort || ""
+  });
 });
 
-app.post("/api/poe-config", requireAuth, express.json(), (req, res) => {
-  const { apiKey } = req.body;
-  if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
-    return res.status(400).json({ error: "API key is required" });
+app.post("/api/claude-config", requireAuth, express.json(), (req, res) => {
+  const { baseUrl, authToken, model, haikuModel, effort } = req.body;
+  if (!baseUrl || typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return res.status(400).json({ error: "ANTHROPIC_BASE_URL is required" });
+  }
+  if (!authToken || typeof authToken !== "string" || !authToken.trim()) {
+    return res.status(400).json({ error: "ANTHROPIC_AUTH_TOKEN is required" });
   }
 
   try {
-    fs.writeFileSync(POE_KEY_FILE, apiKey.trim());
+    const cfg = {
+      baseUrl: baseUrl.trim(),
+      authToken: authToken.trim(),
+      model: (model && model.trim()) || "",
+      haikuModel: (haikuModel && haikuModel.trim()) || "",
+      effort: (effort && effort.trim()) || "max"
+    };
+    fs.writeFileSync(CLAUDE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
+
     const bashrcPath = path.join(USER_WORK_DIR, ".bashrc");
     const envLines = [
       "",
-      "# Poe API configuration",
-      'export ANTHROPIC_BASE_URL="https://api.poe.com"',
-      `export ANTHROPIC_AUTH_TOKEN="${apiKey.trim()}"`,
-      'export ANTHROPIC_API_KEY=""'
-    ].join("\n");
+      "# Claude Code configuration",
+      `export ANTHROPIC_BASE_URL="${cfg.baseUrl}"`,
+      `export ANTHROPIC_AUTH_TOKEN="${cfg.authToken}"`,
+      'export ANTHROPIC_API_KEY=""',
+      cfg.model ? `export ANTHROPIC_MODEL="${cfg.model}"` : "",
+      cfg.haikuModel ? `export ANTHROPIC_DEFAULT_HAIKU_MODEL="${cfg.haikuModel}"` : "",
+      `export CLAUDE_CODE_EFFORT_LEVEL="${cfg.effort}"`
+    ].filter(Boolean).join("\n");
 
     let bashrc = "";
     if (fs.existsSync(bashrcPath)) {
       bashrc = fs.readFileSync(bashrcPath, "utf8");
-      bashrc = bashrc.replace(/\n*# Poe API configuration\n.*/s, "");
+      bashrc = bashrc.replace(/\n*# Claude Code configuration\n.*/s, "");
     }
     fs.writeFileSync(bashrcPath, bashrc + envLines + "\n");
 

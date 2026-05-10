@@ -28,17 +28,36 @@
       </div>
     </div>
 
-    <div id="poe-overlay" style="display:none">
-      <div id="poe-box">
-        <h2>Poe API 配置</h2>
-        <p class="poe-desc">首次使用需配置 Poe API Key，用于 Claude Code 接入</p>
-        <form id="poe-form" onsubmit="handlePoeConfig(event)">
-          <label for="poe-key">Poe API Key</label>
-          <input type="password" id="poe-key" placeholder="输入你的 Poe API Key" required />
+    <div id="claude-config-overlay" style="display:none">
+      <div id="claude-config-box">
+        <h2>Claude Code 配置</h2>
+        <form id="claude-config-form" onsubmit="handleClaudeConfig(event)">
+          <label for="cc-base-url">ANTHROPIC_BASE_URL <span class="required">*</span></label>
+          <input type="text" id="cc-base-url" value="https://api.poe.com" required />
+          <label for="cc-auth-token">ANTHROPIC_AUTH_TOKEN <span class="required">*</span></label>
+          <input type="password" id="cc-auth-token" placeholder="输入 Auth Token" required />
+          <label for="cc-model">ANTHROPIC_MODEL</label>
+          <select id="cc-model">
+            <option value="">-- 不设置 --</option>
+            <option value="deepseek-v4-pro[1m]">deepseek-v4-pro[1m]</option>
+          </select>
+          <label for="cc-haiku-model">ANTHROPIC_DEFAULT_HAIKU_MODEL</label>
+          <select id="cc-haiku-model">
+            <option value="">-- 不设置 --</option>
+            <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+          </select>
+          <label for="cc-effort">CLAUDE_CODE_EFFORT_LEVEL</label>
+          <select id="cc-effort">
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max" selected>max</option>
+          </select>
           <button type="submit">保存并进入</button>
-          <button type="button" class="poe-skip-btn" onclick="skipPoeConfig()">跳过</button>
+          <button type="button" class="poe-skip-btn" onclick="skipClaudeConfig()">跳过</button>
         </form>
-        <div id="poe-error"></div>
+        <div id="claude-config-error"></div>
       </div>
     </div>
 
@@ -66,7 +85,7 @@
           <div class="file-list-loading">加载中...</div>
         </div>
         <div id="sidebar-footer">
-          <button id="poe-config-btn" title="配置 Poe API Key">⚙️ Poe 配置</button>
+          <button id="claude-config-btn" title="配置 Claude Code">⚙️ Claude Code 配置</button>
           <button id="plugin-install-btn" title="安装插件">📦 插件安装</button>
         </div>
 
@@ -98,23 +117,31 @@
 
       function showLogin() {
         document.getElementById("login-overlay").style.display = "flex";
-        document.getElementById("poe-overlay").style.display = "none";
+        document.getElementById("claude-config-overlay").style.display = "none";
         document.getElementById("app-container").style.display = "none";
       }
 
-      function showPoeConfig() {
+      function showClaudeConfig() {
         document.getElementById("login-overlay").style.display = "none";
-        document.getElementById("poe-overlay").style.display = "flex";
+        document.getElementById("claude-config-overlay").style.display = "flex";
         document.getElementById("app-container").style.display = "none";
-        document.getElementById("poe-key").focus();
+        document.getElementById("cc-base-url").focus();
       }
 
-      document.getElementById("poe-config-btn").addEventListener("click", function () {
-        document.getElementById("poe-overlay").style.display = "flex";
+      document.getElementById("claude-config-btn").addEventListener("click", function () {
+        document.getElementById("claude-config-overlay").style.display = "flex";
         document.getElementById("app-container").style.display = "none";
-        document.getElementById("poe-key").value = "";
-        document.getElementById("poe-error").textContent = "";
-        document.getElementById("poe-key").focus();
+        document.getElementById("claude-config-error").textContent = "";
+        fetchWithAuth("/api/claude-config").then(r => r.json()).then(data => {
+          if (data.baseUrl) document.getElementById("cc-base-url").value = data.baseUrl;
+          if (data.authToken) document.getElementById("cc-auth-token").value = data.authToken;
+          if (data.model) document.getElementById("cc-model").value = data.model;
+          else document.getElementById("cc-model").value = "";
+          if (data.haikuModel) document.getElementById("cc-haiku-model").value = data.haikuModel;
+          else document.getElementById("cc-haiku-model").value = "";
+          if (data.effort) document.getElementById("cc-effort").value = data.effort;
+        }).catch(() => {});
+        document.getElementById("cc-base-url").focus();
       });
 
       document.getElementById("plugin-install-btn").addEventListener("click", function () {
@@ -151,7 +178,7 @@
 
       function showApp() {
         document.getElementById("login-overlay").style.display = "none";
-        document.getElementById("poe-overlay").style.display = "none";
+        document.getElementById("claude-config-overlay").style.display = "none";
         document.getElementById("app-container").style.display = "flex";
         initTerminal();
         loadFiles("");
@@ -173,8 +200,8 @@
           .then((data) => {
             if (data.token) {
               setToken(data.token);
-              if (!data.poeConfigured) {
-                showPoeConfig();
+              if (!data.claudeConfigured) {
+                showClaudeConfig();
               } else {
                 showApp();
               }
@@ -187,23 +214,26 @@
           });
       }
 
-      window.handlePoeConfig = function (event) {
+      window.handleClaudeConfig = function (event) {
         event.preventDefault();
-        const apiKey = document.getElementById("poe-key").value;
-        const errorEl = document.getElementById("poe-error");
+        const baseUrl = document.getElementById("cc-base-url").value.trim();
+        const authToken = document.getElementById("cc-auth-token").value.trim();
+        const model = document.getElementById("cc-model").value.trim();
+        const haikuModel = document.getElementById("cc-haiku-model").value.trim();
+        const effort = document.getElementById("cc-effort").value.trim();
+        const errorEl = document.getElementById("claude-config-error");
         errorEl.textContent = "";
 
-        fetchWithAuth("/api/poe-config", {
+        fetchWithAuth("/api/claude-config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ apiKey })
+          body: JSON.stringify({ baseUrl, authToken, model, haikuModel, effort })
         })
           .then((r) => r.json())
           .then((data) => {
             if (data.ok) {
               pendingCmd = "source ~/.bashrc";
               showApp();
-              // 终端已初始化时 WebSocket 不会重新 onopen，需主动发送
               if (socket && socket.readyState === WebSocket.OPEN) {
                 setTimeout(() => { sendToTerminal(pendingCmd); pendingCmd = null; }, 500);
               }
@@ -216,7 +246,7 @@
           });
       }
 
-      window.skipPoeConfig = function () {
+      window.skipClaudeConfig = function () {
         showApp();
       }
 
@@ -538,13 +568,13 @@
       (function () {
         const token = getToken();
         if (token) {
-          fetchWithAuth("/api/poe-status")
+          fetchWithAuth("/api/claude-config")
             .then((r) => r.json())
             .then((data) => {
               if (data.configured) {
                 showApp();
               } else {
-                showPoeConfig();
+                showClaudeConfig();
               }
             })
             .catch(() => showLogin());
