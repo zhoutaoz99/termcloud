@@ -76,7 +76,7 @@
         loadFiles("");
       }
 
-      function handleLogin(event) {
+      window.handleLogin = function (event) {
         event.preventDefault();
         const username = document.getElementById("login-username").value;
         const password = document.getElementById("login-password").value;
