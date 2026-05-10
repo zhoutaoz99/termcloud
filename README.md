@@ -1,18 +1,52 @@
-# Web Linux Console (Minimal)
+# Web Linux Console
 
-一个最小化的 Web 控制台：在 Linux 服务器本机启动 Node.js 服务，通过浏览器访问终端并执行本机命令。
+一个基于 Web 的 Linux 终端控制台：在 Linux 服务器本机启动 Node.js 服务，通过浏览器访问终端并执行本机命令，同时提供文件管理功能。
 
 ## 功能
 
-- 浏览器终端输入命令并在本机执行
-- 支持 TUI 程序（vim/top/htop/less/tmux）
-- 支持通过 `/download?path=...` 下载服务器文件
+### 终端
+
+- 浏览器终端通过 xterm.js 连接本机 PTY，支持 TUI 程序（vim / top / htop / less / tmux）
+- 终端输出批量回放：重连时自动回放缓冲区内容（上限 1MB），无需重新执行命令
+- 断线自动重连（2 秒间隔）
+- 窗口自适应缩放，自动同步终端尺寸到 PTY
+- Unicode 11 宽度处理，CJK 等宽字体回退链，确保 Markdown 表格在等宽终端中对齐
+- 终端字体禁用连字（ligatures），支持字形重叠矫正
+- 客户端输出批量写入（requestAnimationFrame 合并），减少渲染开销
+
+### 文件管理
+
+- 侧边栏文件浏览器：列出目录、导航子目录、返回上级
+- 文件/目录排序：目录在前，按名称字母排序
+- 点号开头的隐藏文件自动过滤
+- 文件下载：直接 URL 导航（`GET /download`），浏览器原生流式写入磁盘，不占用内存
+- 文件/目录删除：带确认弹窗
+- 快速点击目录时自动取消前一个未完成的请求（AbortController），避免并发冲突
+
+### 认证与安全
+
+- JWT 登录认证（token 24 小时过期）
+- 登录接口 IP 速率限制：每 IP 每分钟最多 5 次尝试，防止暴力破解和 DoS
+- 所有 API 和 WebSocket 连接均需携带 token
+- 用户工作目录隔离：路径遍历保护（`isPathWithinUserDir`），API 拒绝访问工作目录以外的路径
+
+### 性能优化
+
+- 二进制 WebSocket 协议（6 种消息类型），比文本 JSON 协议更紧凑
+- 服务端输出批量发送（16ms / 60Hz 定时器），减少 WebSocket 帧数
+- WebSocket perMessageDeflate 压缩（level 1，64 字节阈值）
+- HTTP gzip 压缩（compression 中间件）
+- 静态资源缓存（vendor 文件 7 天，字体文件 1 年，ETag）
+- `fs.promises.readdir({ withFileTypes: true })` 替代逐条 `stat()`，目录列表系统调用从 N+1 降为 1
+- 侧边栏不可见时不调度自动刷新定时器
+- vendor JS 脚本使用 `defer` 加载，不阻塞登录表单首次渲染
+- 批量刷新定时器按需启停：无活跃会话时停止 60Hz 空轮询
 
 ## 技术架构
 
 ```text
-Browser -> xterm.js -> WebSocket -> Node.js -> node-pty -> /bin/bash
-Browser -> HTTP GET /download -> Node.js -> 本机文件
+Browser -> xterm.js -> WebSocket (binary) -> Node.js -> node-pty -> /bin/bash
+Browser -> HTTP (JWT) -> Node.js -> 文件系统 API
 ```
 
 ## 快速开始
@@ -28,14 +62,48 @@ npm start
 http://<server-ip>:3000
 ```
 
+登录凭据配置在 `config.json` 中：
+
+```json
+{
+  "username": "your-username",
+  "password": "your-password"
+}
+```
+
+### 环境变量
+
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `PORT` | 服务监听端口 | `3000` |
+| `TERMCLOUD_UTF8_LOCALE` | PTY 的 UTF-8 locale | `en_US.UTF-8` (macOS) / `C.UTF-8` (Linux) |
+
+### 开发模式
+
+```bash
+npm run dev
+```
+
+使用 concurrently 同时启动 nodemon（服务端热重载）和 browser-sync（前端文件变更自动刷新）。
+
 ## 项目结构
 
 ```text
 .
+├── config.json              # 登录凭据配置（已 gitignore）
+├── .jwt_secret              # JWT 签名密钥（自动生成，已 gitignore）
 ├── package.json
-├── server.js
+├── server.js                # 后端：Express + WebSocket + node-pty
+├── scripts/
+│   └── validate.mjs         # CI 校验脚本
 └── public/
-    └── index.html
+    ├── index.html           # 前端：xterm.js 终端 + 文件管理器
+    ├── style.css            # 样式：暗色主题 + 等宽字体配置
+    └── vendor/              # 本地 vendor 文件（无 CDN 依赖）
+        ├── xterm.js
+        ├── xterm.css
+        ├── addon-fit.js
+        └── addon-unicode11.js
 ```
 
 ## 本地校验
@@ -49,8 +117,9 @@ CI 会在每次 push / pull request 自动执行同样的校验流程（见 `.gi
 该命令不依赖第三方包安装完成，主要检查：
 
 - `server.js` 语法可通过 `node --check`
-- 前端页面包含终端 WebSocket 路径与下载入口
-- 后端包含 `/download` 路由与 WebSocket 服务初始化
+- 前端页面包含终端 WebSocket 路径、下载入口、Unicode 宽度处理、binary 协议
+- 后端包含 `/download` 路由、WebSocket 服务、RingBuffer、批量刷新、UTF-8 locale 处理
+- 所有 vendor 文件存在
 
 ## Nginx 反向代理（示例）
 
@@ -121,4 +190,4 @@ lsof -ti:3000 | xargs kill -9
 
 ## 注意
 
-本项目是最小原型，不包含认证、权限控制、审计、多租户隔离、访问白名单等安全能力，不建议直接暴露公网长期使用。
+本项目是最小原型，支持单用户场景，访问控制通过 JWT 认证和 IP 速率限制实现。不建议直接暴露公网长期使用，如需公网部署建议配合 Nginx 反向代理和 HTTPS。
