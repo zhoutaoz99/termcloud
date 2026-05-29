@@ -47,38 +47,77 @@ interface TerminalSession {
 const CONFIG_PATH = path.join(__dirname, "..", "config.json");
 
 if (!fs.existsSync(CONFIG_PATH)) {
-  console.error("config.json not found. Please create it with username and password.");
+  console.error("config.json not found. Please create it with users array.");
   process.exit(1);
 }
 
-const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) as { username: string; password: string };
+interface UserEntry {
+  username: string;
+  password: string;
+}
 
-if (typeof config.username !== "string" || typeof config.password !== "string") {
-  console.error("config.json must contain username and password strings.");
+interface UserConfig {
+  users: UserEntry[];
+}
+
+const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) as UserConfig;
+
+if (!Array.isArray(config.users) || config.users.length === 0) {
+  console.error("config.json must contain a non-empty 'users' array.");
   process.exit(1);
 }
 
-const USER_WORK_DIR = ((): string => {
-  const preferred = path.join("/data/users", config.username);
+const usersMap = new Map<string, string>();
+
+for (const entry of config.users) {
+  if (typeof entry.username !== "string" || typeof entry.password !== "string" ||
+      !entry.username || !entry.password) {
+    console.error("Each user entry must have non-empty username and password strings.");
+    process.exit(1);
+  }
+  if (usersMap.has(entry.username)) {
+    console.error(`Duplicate username in config: ${entry.username}`);
+    process.exit(1);
+  }
+  usersMap.set(entry.username, entry.password);
+}
+
+if (usersMap.size === 0) {
+  console.error("config.json must contain at least one user.");
+  process.exit(1);
+}
+
+console.log(`Loaded ${usersMap.size} user(s): ${[...usersMap.keys()].join(", ")}`);
+
+// ── per-user work directory ──
+const userWorkDirCache = new Map<string, string>();
+
+function getUserWorkDir(username: string): string {
+  const cached = userWorkDirCache.get(username);
+  if (cached) return cached;
+
+  const preferred = path.join("/data/users", username);
   try {
     if (!fs.existsSync(preferred)) {
       fs.mkdirSync(preferred, { recursive: true });
     }
+    userWorkDirCache.set(username, preferred);
     return preferred;
   } catch {
-    // /data not writable (e.g. macOS read-only root), fallback to home dir
-    const fallback = path.join(os.homedir(), ".termcloud-data", "users", config.username);
+    const fallback = path.join(os.homedir(), ".termcloud-data", "users", username);
     if (!fs.existsSync(fallback)) {
       fs.mkdirSync(fallback, { recursive: true });
     }
     console.warn(`Cannot create ${preferred}, using fallback: ${fallback}`);
+    userWorkDirCache.set(username, fallback);
     return fallback;
   }
-})();
+}
 
-function isPathWithinUserDir(resolvedPath: string): boolean {
+function isPathWithinUserDir(resolvedPath: string, username: string): boolean {
+  const userDir = getUserWorkDir(username);
   const normalized = path.resolve(resolvedPath);
-  return normalized === USER_WORK_DIR || normalized.startsWith(USER_WORK_DIR + path.sep);
+  return normalized === userDir || normalized.startsWith(userDir + path.sep);
 }
 
 const JWT_SECRET_PATH = path.join(__dirname, "..", ".jwt_secret");
@@ -98,32 +137,36 @@ function getDefaultUtf8Locale(): string {
   return process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 }
 
-const CLAUDE_CONFIG_FILE = path.join(USER_WORK_DIR, ".claude_code_config.json");
-
-function isClaudeConfigured(): boolean {
-  return fs.existsSync(CLAUDE_CONFIG_FILE);
+function getClaudeConfigPath(username: string): string {
+  return path.join(getUserWorkDir(username), ".claude_code_config.json");
 }
 
-function getClaudeConfig(): ClaudeConfig {
-  if (!fs.existsSync(CLAUDE_CONFIG_FILE)) return {};
+function isClaudeConfigured(username: string): boolean {
+  return fs.existsSync(getClaudeConfigPath(username));
+}
+
+function getClaudeConfig(username: string): ClaudeConfig {
+  const configPath = getClaudeConfigPath(username);
+  if (!fs.existsSync(configPath)) return {};
   try {
-    return JSON.parse(fs.readFileSync(CLAUDE_CONFIG_FILE, "utf8")) as ClaudeConfig;
+    return JSON.parse(fs.readFileSync(configPath, "utf8")) as ClaudeConfig;
   } catch {
     return {};
   }
 }
 
-function createTerminalEnv(): NodeJS.ProcessEnv {
+function createTerminalEnv(username: string): NodeJS.ProcessEnv {
+  const userDir = getUserWorkDir(username);
   const fallbackLocale = process.env.TERMCLOUD_UTF8_LOCALE || getDefaultUtf8Locale();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     TERM: "xterm-256color",
     COLORTERM: process.env.COLORTERM || "truecolor",
-    HOME: USER_WORK_DIR
+    HOME: userDir
   };
 
-  if (isClaudeConfigured()) {
-    const cfg = getClaudeConfig();
+  if (isClaudeConfigured(username)) {
+    const cfg = getClaudeConfig(username);
     if (cfg.baseUrl) env.ANTHROPIC_BASE_URL = cfg.baseUrl;
     if (cfg.authToken) env.ANTHROPIC_AUTH_TOKEN = cfg.authToken;
     env.ANTHROPIC_API_KEY = "";
@@ -227,25 +270,27 @@ app.post("/api/login", express.json(), checkLoginRate, (req: express.Request, re
     return;
   }
 
-  if (username !== config.username) {
+  const storedPassword = usersMap.get(username);
+  if (!storedPassword) {
     res.status(401).json({ error: "invalid credentials" });
     return;
   }
 
-  if (password !== config.password) {
+  if (password !== storedPassword) {
     res.status(401).json({ error: "invalid credentials" });
     return;
   }
 
   const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: "24h" });
-  res.json({ token, claudeConfigured: isClaudeConfigured() });
+  res.json({ token, claudeConfigured: isClaudeConfigured(username) });
 });
 
 // ── Claude Code config endpoints ──
 app.get("/api/claude-config", requireAuth, (req: AuthenticatedRequest, res: express.Response) => {
-  const cfg = getClaudeConfig();
+  const username = req.user!.username;
+  const cfg = getClaudeConfig(username);
   res.json({
-    configured: isClaudeConfigured(),
+    configured: isClaudeConfigured(username),
     baseUrl: cfg.baseUrl || "",
     authToken: cfg.authToken || "",
     model: cfg.model || "",
@@ -255,6 +300,7 @@ app.get("/api/claude-config", requireAuth, (req: AuthenticatedRequest, res: expr
 });
 
 app.post("/api/claude-config", requireAuth, express.json(), (req: AuthenticatedRequest, res: express.Response) => {
+  const username = req.user!.username;
   const { baseUrl, authToken, model, haikuModel, effort } = req.body;
   if (!baseUrl || typeof baseUrl !== "string" || !baseUrl.trim()) {
     res.status(400).json({ error: "ANTHROPIC_BASE_URL is required" });
@@ -266,6 +312,7 @@ app.post("/api/claude-config", requireAuth, express.json(), (req: AuthenticatedR
   }
 
   try {
+    const userDir = getUserWorkDir(username);
     const cfg: ClaudeConfig = {
       baseUrl: baseUrl.trim(),
       authToken: authToken.trim(),
@@ -273,9 +320,9 @@ app.post("/api/claude-config", requireAuth, express.json(), (req: AuthenticatedR
       haikuModel: (haikuModel && haikuModel.trim()) || "",
       effort: (effort && effort.trim()) || "max"
     };
-    fs.writeFileSync(CLAUDE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
+    fs.writeFileSync(getClaudeConfigPath(username), JSON.stringify(cfg, null, 2));
 
-    const bashrcPath = path.join(USER_WORK_DIR, ".bashrc");
+    const bashrcPath = path.join(userDir, ".bashrc");
     const envLines = [
       "",
       "# Claude Code configuration",
@@ -302,10 +349,12 @@ app.post("/api/claude-config", requireAuth, express.json(), (req: AuthenticatedR
 
 // ── protected API routes ──
 app.get("/api/files", requireAuth, async (req: AuthenticatedRequest, res: express.Response) => {
-  let dir = (req.query.dir as string) || USER_WORK_DIR;
+  const username = req.user!.username;
+  const userDir = getUserWorkDir(username);
+  let dir = (req.query.dir as string) || userDir;
   dir = path.resolve(dir);
 
-  if (!isPathWithinUserDir(dir)) {
+  if (!isPathWithinUserDir(dir, username)) {
     res.status(403).json({ error: "access denied: path outside work directory" });
     return;
   }
@@ -343,13 +392,14 @@ app.get("/api/files", requireAuth, async (req: AuthenticatedRequest, res: expres
           return { name: d.name, isFile, isDirectory, size };
         })
     );
-    res.json({ dir, entries: entries.filter(Boolean), workDir: USER_WORK_DIR });
+    res.json({ dir, entries: entries.filter(Boolean), workDir: userDir });
   } catch {
     res.status(403).json({ error: "permission denied" });
   }
 });
 
 app.delete("/api/files", requireAuth, async (req: AuthenticatedRequest, res: express.Response) => {
+  const username = req.user!.username;
   const filePath = req.query.path as string;
 
   if (!filePath) {
@@ -359,7 +409,7 @@ app.delete("/api/files", requireAuth, async (req: AuthenticatedRequest, res: exp
 
   const resolved = path.resolve(filePath);
 
-  if (!isPathWithinUserDir(resolved)) {
+  if (!isPathWithinUserDir(resolved, username)) {
     res.status(403).json({ error: "access denied: path outside work directory" });
     return;
   }
@@ -380,6 +430,7 @@ app.delete("/api/files", requireAuth, async (req: AuthenticatedRequest, res: exp
 });
 
 app.get("/download", requireAuth, async (req: AuthenticatedRequest, res: express.Response) => {
+  const username = req.user!.username;
   const filePath = req.query.path as string;
 
   if (!filePath) {
@@ -389,7 +440,7 @@ app.get("/download", requireAuth, async (req: AuthenticatedRequest, res: express
 
   const resolved = path.resolve(filePath);
 
-  if (!isPathWithinUserDir(resolved)) {
+  if (!isPathWithinUserDir(resolved, username)) {
     res.status(403).send("access denied: path outside work directory");
     return;
   }
@@ -502,13 +553,14 @@ function getOrCreateSession(username: string): TerminalSession {
   const existing = sessions.get(username);
   if (existing && !existing.exited) return existing;
 
+  const userDir = getUserWorkDir(username);
   const shell = process.env.SHELL || "/bin/bash";
   const ptyProcess = pty.spawn(shell, [], {
     name: "xterm-256color",
     cols: 100,
     rows: 30,
-    cwd: USER_WORK_DIR,
-    env: createTerminalEnv()
+    cwd: userDir,
+    env: createTerminalEnv(username)
   });
 
   const session: TerminalSession = {

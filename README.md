@@ -23,12 +23,17 @@
 - 文件/目录删除：带确认弹窗
 - 快速点击目录时自动取消前一个未完成的请求（AbortController），避免并发冲突
 
+### 多用户与隔离
+
+- 支持配置多个用户，每个用户拥有独立的 shell 环境（独立 PTY 进程、HOME 目录、`.bashrc`、环境变量）
+- 每个用户的 Claude Code 配置独立存储，互不影响
+- 用户文件空间隔离：路径遍历保护（`isPathWithinUserDir`），API 拒绝访问其他用户的工作目录
+
 ### 认证与安全
 
 - JWT 登录认证（token 24 小时过期）
 - 登录接口 IP 速率限制：每 IP 每分钟最多 5 次尝试，防止暴力破解和 DoS
 - 所有 API 和 WebSocket 连接均需携带 token
-- 用户工作目录隔离：路径遍历保护（`isPathWithinUserDir`），API 拒绝访问工作目录以外的路径
 
 ### 性能优化
 
@@ -82,12 +87,14 @@ npm_config_build_from_source=true npm ci
 http://<server-ip>:3000
 ```
 
-登录凭据配置在 `config.json` 中：
+登录凭据配置在 `config.json` 中，支持多用户：
 
 ```json
 {
-  "username": "your-username",
-  "password": "your-password"
+  "users": [
+    { "username": "alice", "password": "pass1" },
+    { "username": "bob", "password": "pass2" }
+  ]
 }
 ```
 
@@ -111,8 +118,8 @@ http://<server-ip>:3000
 # 使用默认凭据（admin/admin）
 docker-compose up -d
 
-# 自定义用户名和密码
-USERNAME=myuser PASSWORD=mypassword docker-compose up -d
+# 配置用户（格式：user1:pass1,user2:pass2）
+USERS=alice:pass1,bob:pass2 docker-compose up -d
 ```
 
 访问 `http://<server-ip>:3000` 即可使用。
@@ -121,8 +128,7 @@ USERNAME=myuser PASSWORD=mypassword docker-compose up -d
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `USERNAME` | 登录用户名 | `admin` |
-| `PASSWORD` | 登录密码 | `admin` |
+| `USERS` | 用户配置，格式 `user1:pass1,user2:pass2` | `admin:admin` |
 | `PORT` | 宿主机映射端口 | `3000` |
 | `TERMCLOUD_REPLAY_BUFFER_BYTES` | 终端重连回放缓冲区上限 | `262144` |
 | `TERMCLOUD_REPLAY_FRAME_BYTES` | 重连回放单帧目标大小 | `65536` |
@@ -160,13 +166,13 @@ npm run dev
 
 ```text
 .
-├── config.json              # 登录凭据配置（已 gitignore）
+├── config.json              # 多用户凭据配置（已 gitignore）
 ├── .jwt_secret              # JWT 签名密钥（自动生成，已 gitignore）
 ├── package.json
 ├── server.js                # 后端：Express + WebSocket + node-pty
 ├── docker-compose.yml       # Docker Compose 编排
 ├── Dockerfile               # Docker 镜像构建
-├── docker-entrypoint.sh     # 容器入口脚本（从环境变量生成 config.json）
+├── docker-entrypoint.sh     # 容器入口脚本（从环境变量生成多用户 config.json）
 ├── scripts/
 │   └── validate.mjs         # CI 校验脚本
 └── public/
@@ -263,4 +269,4 @@ lsof -ti:3000 | xargs kill -9
 
 ## 注意
 
-本项目是最小原型，支持单用户场景，访问控制通过 JWT 认证和 IP 速率限制实现。不建议直接暴露公网长期使用，如需公网部署建议配合 Nginx 反向代理和 HTTPS。
+本项目支持多用户场景，每个用户拥有独立的 shell 环境和文件空间。访问控制通过 JWT 认证和 IP 速率限制实现。不建议直接暴露公网长期使用，如需公网部署建议配合 Nginx 反向代理和 HTTPS。

@@ -50,37 +50,71 @@ const app = (0, express_1.default)();
 const server = http_1.default.createServer(app);
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 // ── config loading ──
-const CONFIG_PATH = path_1.default.join(__dirname, "..", "config.json");
+const CONFIG_PATH = (() => {
+    // In Docker, prefer /data/config.json (persistent volume)
+    const dockerPath = "/data/config.json";
+    try {
+        if (fs_1.default.existsSync(dockerPath))
+            return dockerPath;
+    }
+    catch { /* ignore */ }
+    return path_1.default.join(__dirname, "..", "config.json");
+})();
 if (!fs_1.default.existsSync(CONFIG_PATH)) {
-    console.error("config.json not found. Please create it with username and password.");
+    console.error("config.json not found. Please create it with users array.");
     process.exit(1);
 }
 const config = JSON.parse(fs_1.default.readFileSync(CONFIG_PATH, "utf8"));
-if (typeof config.username !== "string" || typeof config.password !== "string") {
-    console.error("config.json must contain username and password strings.");
+if (!Array.isArray(config.users) || config.users.length === 0) {
+    console.error("config.json must contain a non-empty 'users' array.");
     process.exit(1);
 }
-const USER_WORK_DIR = (() => {
-    const preferred = path_1.default.join("/data/users", config.username);
+const usersMap = new Map();
+for (const entry of config.users) {
+    if (typeof entry.username !== "string" || typeof entry.password !== "string" ||
+        !entry.username || !entry.password) {
+        console.error("Each user entry must have non-empty username and password strings.");
+        process.exit(1);
+    }
+    if (usersMap.has(entry.username)) {
+        console.error(`Duplicate username in config: ${entry.username}`);
+        process.exit(1);
+    }
+    usersMap.set(entry.username, entry.password);
+}
+if (usersMap.size === 0) {
+    console.error("config.json must contain at least one user.");
+    process.exit(1);
+}
+console.log(`Loaded ${usersMap.size} user(s): ${[...usersMap.keys()].join(", ")}`);
+// ── per-user work directory ──
+const userWorkDirCache = new Map();
+function getUserWorkDir(username) {
+    const cached = userWorkDirCache.get(username);
+    if (cached)
+        return cached;
+    const preferred = path_1.default.join("/data/users", username);
     try {
         if (!fs_1.default.existsSync(preferred)) {
             fs_1.default.mkdirSync(preferred, { recursive: true });
         }
+        userWorkDirCache.set(username, preferred);
         return preferred;
     }
     catch {
-        // /data not writable (e.g. macOS read-only root), fallback to home dir
-        const fallback = path_1.default.join(os_1.default.homedir(), ".termcloud-data", "users", config.username);
+        const fallback = path_1.default.join(os_1.default.homedir(), ".termcloud-data", "users", username);
         if (!fs_1.default.existsSync(fallback)) {
             fs_1.default.mkdirSync(fallback, { recursive: true });
         }
         console.warn(`Cannot create ${preferred}, using fallback: ${fallback}`);
+        userWorkDirCache.set(username, fallback);
         return fallback;
     }
-})();
-function isPathWithinUserDir(resolvedPath) {
+}
+function isPathWithinUserDir(resolvedPath, username) {
+    const userDir = getUserWorkDir(username);
     const normalized = path_1.default.resolve(resolvedPath);
-    return normalized === USER_WORK_DIR || normalized.startsWith(USER_WORK_DIR + path_1.default.sep);
+    return normalized === userDir || normalized.startsWith(userDir + path_1.default.sep);
 }
 const JWT_SECRET_PATH = path_1.default.join(__dirname, "..", ".jwt_secret");
 let JWT_SECRET;
@@ -97,30 +131,34 @@ function isUtf8Locale(value) {
 function getDefaultUtf8Locale() {
     return process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 }
-const CLAUDE_CONFIG_FILE = path_1.default.join(USER_WORK_DIR, ".claude_code_config.json");
-function isClaudeConfigured() {
-    return fs_1.default.existsSync(CLAUDE_CONFIG_FILE);
+function getClaudeConfigPath(username) {
+    return path_1.default.join(getUserWorkDir(username), ".claude_code_config.json");
 }
-function getClaudeConfig() {
-    if (!fs_1.default.existsSync(CLAUDE_CONFIG_FILE))
+function isClaudeConfigured(username) {
+    return fs_1.default.existsSync(getClaudeConfigPath(username));
+}
+function getClaudeConfig(username) {
+    const configPath = getClaudeConfigPath(username);
+    if (!fs_1.default.existsSync(configPath))
         return {};
     try {
-        return JSON.parse(fs_1.default.readFileSync(CLAUDE_CONFIG_FILE, "utf8"));
+        return JSON.parse(fs_1.default.readFileSync(configPath, "utf8"));
     }
     catch {
         return {};
     }
 }
-function createTerminalEnv() {
+function createTerminalEnv(username) {
+    const userDir = getUserWorkDir(username);
     const fallbackLocale = process.env.TERMCLOUD_UTF8_LOCALE || getDefaultUtf8Locale();
     const env = {
         ...process.env,
         TERM: "xterm-256color",
         COLORTERM: process.env.COLORTERM || "truecolor",
-        HOME: USER_WORK_DIR
+        HOME: userDir
     };
-    if (isClaudeConfigured()) {
-        const cfg = getClaudeConfig();
+    if (isClaudeConfigured(username)) {
+        const cfg = getClaudeConfig(username);
         if (cfg.baseUrl)
             env.ANTHROPIC_BASE_URL = cfg.baseUrl;
         if (cfg.authToken)
@@ -215,22 +253,24 @@ app.post("/api/login", express_1.default.json(), checkLoginRate, (req, res) => {
         res.status(400).json({ error: "username and password required" });
         return;
     }
-    if (username !== config.username) {
+    const storedPassword = usersMap.get(username);
+    if (!storedPassword) {
         res.status(401).json({ error: "invalid credentials" });
         return;
     }
-    if (password !== config.password) {
+    if (password !== storedPassword) {
         res.status(401).json({ error: "invalid credentials" });
         return;
     }
     const token = jsonwebtoken_1.default.sign({ username }, JWT_SECRET, { expiresIn: "24h" });
-    res.json({ token, claudeConfigured: isClaudeConfigured() });
+    res.json({ token, claudeConfigured: isClaudeConfigured(username) });
 });
 // ── Claude Code config endpoints ──
 app.get("/api/claude-config", requireAuth, (req, res) => {
-    const cfg = getClaudeConfig();
+    const username = req.user.username;
+    const cfg = getClaudeConfig(username);
     res.json({
-        configured: isClaudeConfigured(),
+        configured: isClaudeConfigured(username),
         baseUrl: cfg.baseUrl || "",
         authToken: cfg.authToken || "",
         model: cfg.model || "",
@@ -239,6 +279,7 @@ app.get("/api/claude-config", requireAuth, (req, res) => {
     });
 });
 app.post("/api/claude-config", requireAuth, express_1.default.json(), (req, res) => {
+    const username = req.user.username;
     const { baseUrl, authToken, model, haikuModel, effort } = req.body;
     if (!baseUrl || typeof baseUrl !== "string" || !baseUrl.trim()) {
         res.status(400).json({ error: "ANTHROPIC_BASE_URL is required" });
@@ -249,6 +290,7 @@ app.post("/api/claude-config", requireAuth, express_1.default.json(), (req, res)
         return;
     }
     try {
+        const userDir = getUserWorkDir(username);
         const cfg = {
             baseUrl: baseUrl.trim(),
             authToken: authToken.trim(),
@@ -256,8 +298,8 @@ app.post("/api/claude-config", requireAuth, express_1.default.json(), (req, res)
             haikuModel: (haikuModel && haikuModel.trim()) || "",
             effort: (effort && effort.trim()) || "max"
         };
-        fs_1.default.writeFileSync(CLAUDE_CONFIG_FILE, JSON.stringify(cfg, null, 2));
-        const bashrcPath = path_1.default.join(USER_WORK_DIR, ".bashrc");
+        fs_1.default.writeFileSync(getClaudeConfigPath(username), JSON.stringify(cfg, null, 2));
+        const bashrcPath = path_1.default.join(userDir, ".bashrc");
         const envLines = [
             "",
             "# Claude Code configuration",
@@ -282,9 +324,11 @@ app.post("/api/claude-config", requireAuth, express_1.default.json(), (req, res)
 });
 // ── protected API routes ──
 app.get("/api/files", requireAuth, async (req, res) => {
-    let dir = req.query.dir || USER_WORK_DIR;
+    const username = req.user.username;
+    const userDir = getUserWorkDir(username);
+    let dir = req.query.dir || userDir;
     dir = path_1.default.resolve(dir);
-    if (!isPathWithinUserDir(dir)) {
+    if (!isPathWithinUserDir(dir, username)) {
         res.status(403).json({ error: "access denied: path outside work directory" });
         return;
     }
@@ -319,20 +363,21 @@ app.get("/api/files", requireAuth, async (req, res) => {
             }
             return { name: d.name, isFile, isDirectory, size };
         }));
-        res.json({ dir, entries: entries.filter(Boolean), workDir: USER_WORK_DIR });
+        res.json({ dir, entries: entries.filter(Boolean), workDir: userDir });
     }
     catch {
         res.status(403).json({ error: "permission denied" });
     }
 });
 app.delete("/api/files", requireAuth, async (req, res) => {
+    const username = req.user.username;
     const filePath = req.query.path;
     if (!filePath) {
         res.status(400).json({ error: "missing path" });
         return;
     }
     const resolved = path_1.default.resolve(filePath);
-    if (!isPathWithinUserDir(resolved)) {
+    if (!isPathWithinUserDir(resolved, username)) {
         res.status(403).json({ error: "access denied: path outside work directory" });
         return;
     }
@@ -352,13 +397,14 @@ app.delete("/api/files", requireAuth, async (req, res) => {
     }
 });
 app.get("/download", requireAuth, async (req, res) => {
+    const username = req.user.username;
     const filePath = req.query.path;
     if (!filePath) {
         res.status(400).send("missing path");
         return;
     }
     const resolved = path_1.default.resolve(filePath);
-    if (!isPathWithinUserDir(resolved)) {
+    if (!isPathWithinUserDir(resolved, username)) {
         res.status(403).send("access denied: path outside work directory");
         return;
     }
@@ -455,13 +501,14 @@ function getOrCreateSession(username) {
     const existing = sessions.get(username);
     if (existing && !existing.exited)
         return existing;
+    const userDir = getUserWorkDir(username);
     const shell = process.env.SHELL || "/bin/bash";
     const ptyProcess = pty.spawn(shell, [], {
         name: "xterm-256color",
         cols: 100,
         rows: 30,
-        cwd: USER_WORK_DIR,
-        env: createTerminalEnv()
+        cwd: userDir,
+        env: createTerminalEnv(username)
     });
     const session = {
         username,
