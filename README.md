@@ -56,6 +56,26 @@ npm install
 npm start
 ```
 
+### macOS 本地开发
+
+如果本地运行时报 `Failed to start terminal session: posix_spawnp failed`，通常是 `node-pty` 原生模块的安装产物不可用。先确保已安装 Xcode Command Line Tools：
+
+```bash
+xcode-select --install
+```
+
+然后从源码重编 `node-pty`：
+
+```bash
+npm rebuild node-pty --build-from-source
+```
+
+如果是全新安装，也可以直接强制源码安装依赖：
+
+```bash
+npm_config_build_from_source=true npm ci
+```
+
 默认监听 `0.0.0.0:3000`，访问：
 
 ```text

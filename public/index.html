@@ -404,7 +404,10 @@
         };
 
         socket.onclose = (event) => {
-          if (event.code === 4001 || event.code === 4003) {
+          if (event.code === 4004) {
+            setConnectionStatus("连接错误", "error");
+            terminal.writeln("\r\nTerminal unavailable. Check server logs.");
+          } else if (event.code === 4001 || event.code === 4003) {
             setConnectionStatus("未连接", "idle");
             clearToken();
             showLogin();

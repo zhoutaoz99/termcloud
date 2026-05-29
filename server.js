@@ -652,19 +652,35 @@ const wss = new WebSocket.Server({
     if (!token) {
       return callback(false, 401, "Unauthorized");
     }
+    let decoded;
     try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      info.req.user = decoded;
-      callback(true);
+      decoded = jwt.verify(token, JWT_SECRET);
     } catch (err) {
-      callback(false, 401, "Unauthorized");
+      return callback(false, 401, "Unauthorized");
     }
+    info.req.user = decoded;
+    return callback(true);
   }
 });
 
 wss.on("connection", (ws, req) => {
   const username = req.user.username;
-  const session = getOrCreateSession(username);
+  let session;
+
+  try {
+    session = getOrCreateSession(username);
+  } catch (err) {
+    console.error("Failed to start terminal session:", err);
+    if (ws.readyState === WebSocket.OPEN) {
+      const message = `\r\nFailed to start terminal session: ${err.message || "unknown error"}\r\n`;
+      ws.send(encodeOutput(message), () => {
+        ws.close(4004, "terminal unavailable");
+      });
+    } else {
+      ws.terminate();
+    }
+    return;
+  }
 
   session.clients.add(ws);
   cancelSessionIdleCleanup(session);
