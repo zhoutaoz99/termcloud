@@ -2,10 +2,12 @@
   "name": "web-linux-console",
   "version": "1.0.0",
   "description": "Minimal web-based Linux console with xterm.js + node-pty",
-  "main": "server.js",
+  "main": "dist/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "concurrently -k -n server,browser -c blue,green \"nodemon server.js\" \"browser-sync start --proxy http://localhost:${PORT:-3000} --files 'public/**/*' --port ${BS_PORT:-3001} --no-open --no-notify --ws\"",
+    "build:client": "esbuild src/client/main.ts --bundle --outfile=public/client.js --target=es2022",
+    "build": "tsc && npm run build:client",
+    "start": "node dist/server.js",
+    "dev": "concurrently -k -n server,browser -c blue,green \"tsx watch src/server.ts\" \"browser-sync start --proxy http://localhost:${PORT:-3000} --files 'public/**/*' --port ${BS_PORT:-3001} --no-open --no-notify --ws\"",
     "test": "node scripts/validate.mjs"
   },
   "keywords": [
@@ -24,13 +26,15 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.9.1",
+    "@types/ws": "^8.18.1",
     "browser-sync": "^3.0.4",
     "concurrently": "^9.2.1",
-    "nodemon": "^3.1.14"
-  },
-  "nodemonConfig": {
-    "watch": [
-      "server.js"
-    ]
+    "esbuild": "^0.28.0",
+    "tsx": "^4.22.3",
+    "typescript": "^6.0.3"
   }
 }

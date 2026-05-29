@@ -1,34 +1,64 @@
-const express = require("express");
-const fs = require("fs");
-const http = require("http");
-const path = require("path");
-const crypto = require("crypto");
-const compression = require("compression");
-const WebSocket = require("ws");
-const pty = require("node-pty");
-const jwt = require("jsonwebtoken");
+import express from "express";
+import fs from "fs";
+import http from "http";
+import path from "path";
+import crypto from "crypto";
+import os from "os";
+import compression from "compression";
+import WebSocket from "ws";
+import * as pty from "node-pty";
+import jwt from "jsonwebtoken";
 
 const app = express();
 const server = http.createServer(app);
 
-const PORT = process.env.PORT || 3000;
+const PORT = parseInt(process.env.PORT!, 10) || 3000;
+
+// ── interfaces ──
+interface ClaudeConfig {
+  baseUrl?: string;
+  authToken?: string;
+  model?: string;
+  haikuModel?: string;
+  effort?: string;
+}
+
+interface AuthenticatedRequest extends express.Request {
+  user?: { username: string };
+}
+
+interface LoginRateEntry {
+  windowStart: number;
+  count: number;
+}
+
+interface TerminalSession {
+  username: string;
+  pty: pty.IPty;
+  buffer: RingBuffer;
+  clients: Set<WebSocket>;
+  exited: boolean;
+  batchAccumulator: Buffer[];
+  batchPending: boolean;
+  idleTimer: NodeJS.Timeout | null;
+}
 
 // ── config loading ──
-const CONFIG_PATH = path.join(__dirname, "config.json");
+const CONFIG_PATH = path.join(__dirname, "..", "config.json");
 
 if (!fs.existsSync(CONFIG_PATH)) {
   console.error("config.json not found. Please create it with username and password.");
   process.exit(1);
 }
 
-const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) as { username: string; password: string };
 
 if (typeof config.username !== "string" || typeof config.password !== "string") {
   console.error("config.json must contain username and password strings.");
   process.exit(1);
 }
 
-const USER_WORK_DIR = (() => {
+const USER_WORK_DIR = ((): string => {
   const preferred = path.join("/data/users", config.username);
   try {
     if (!fs.existsSync(preferred)) {
@@ -37,7 +67,7 @@ const USER_WORK_DIR = (() => {
     return preferred;
   } catch {
     // /data not writable (e.g. macOS read-only root), fallback to home dir
-    const fallback = path.join(require("os").homedir(), ".termcloud-data", "users", config.username);
+    const fallback = path.join(os.homedir(), ".termcloud-data", "users", config.username);
     if (!fs.existsSync(fallback)) {
       fs.mkdirSync(fallback, { recursive: true });
     }
@@ -46,13 +76,13 @@ const USER_WORK_DIR = (() => {
   }
 })();
 
-function isPathWithinUserDir(resolvedPath) {
+function isPathWithinUserDir(resolvedPath: string): boolean {
   const normalized = path.resolve(resolvedPath);
   return normalized === USER_WORK_DIR || normalized.startsWith(USER_WORK_DIR + path.sep);
 }
 
-const JWT_SECRET_PATH = path.join(__dirname, ".jwt_secret");
-let JWT_SECRET;
+const JWT_SECRET_PATH = path.join(__dirname, "..", ".jwt_secret");
+let JWT_SECRET: string;
 if (fs.existsSync(JWT_SECRET_PATH)) {
   JWT_SECRET = fs.readFileSync(JWT_SECRET_PATH, "utf8").trim();
 } else {
@@ -60,32 +90,32 @@ if (fs.existsSync(JWT_SECRET_PATH)) {
   fs.writeFileSync(JWT_SECRET_PATH, JWT_SECRET);
 }
 
-function isUtf8Locale(value) {
+function isUtf8Locale(value: string | undefined): boolean {
   return typeof value === "string" && /utf-?8/i.test(value);
 }
 
-function getDefaultUtf8Locale() {
+function getDefaultUtf8Locale(): string {
   return process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 }
 
 const CLAUDE_CONFIG_FILE = path.join(USER_WORK_DIR, ".claude_code_config.json");
 
-function isClaudeConfigured() {
+function isClaudeConfigured(): boolean {
   return fs.existsSync(CLAUDE_CONFIG_FILE);
 }
 
-function getClaudeConfig() {
+function getClaudeConfig(): ClaudeConfig {
   if (!fs.existsSync(CLAUDE_CONFIG_FILE)) return {};
   try {
-    return JSON.parse(fs.readFileSync(CLAUDE_CONFIG_FILE, "utf8"));
+    return JSON.parse(fs.readFileSync(CLAUDE_CONFIG_FILE, "utf8")) as ClaudeConfig;
   } catch {
     return {};
   }
 }
 
-function createTerminalEnv() {
+function createTerminalEnv(): NodeJS.ProcessEnv {
   const fallbackLocale = process.env.TERMCLOUD_UTF8_LOCALE || getDefaultUtf8Locale();
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     TERM: "xterm-256color",
     COLORTERM: process.env.COLORTERM || "truecolor",
@@ -117,7 +147,7 @@ function createTerminalEnv() {
 
 // ── middleware ──
 app.use(compression());
-app.use(express.static(path.join(__dirname, "public"), {
+app.use(express.static(path.join(__dirname, "..", "public"), {
   maxAge: "7d",
   etag: true,
   immutable: true,
@@ -129,41 +159,42 @@ app.use(express.static(path.join(__dirname, "public"), {
 }));
 
 // auth middleware
-function requireAuth(req, res, next) {
-  let token = null;
+function requireAuth(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction): void {
+  let token: string | null = null;
 
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
     token = authHeader.slice(7);
   } else if (req.query && req.query.token) {
-    token = req.query.token;
+    token = req.query.token as string;
   }
 
   if (!token) {
-    return res.status(401).json({ error: "unauthorized" });
+    res.status(401).json({ error: "unauthorized" });
+    return;
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET) as { username: string };
     req.user = decoded;
     next();
-  } catch (err) {
-    return res.status(401).json({ error: "unauthorized" });
+  } catch {
+    res.status(401).json({ error: "unauthorized" });
   }
 }
 
 // ── login rate limiter ──
-const loginAttempts = new Map();
+const loginAttempts = new Map<string, LoginRateEntry>();
 const RATE_LIMIT_MAX = 5;
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 
-function checkLoginRate(req, res, next) {
+function checkLoginRate(req: express.Request, res: express.Response, next: express.NextFunction): void {
   const ip = req.ip || req.socket.remoteAddress || "unknown";
   const now = Date.now();
   let entry = loginAttempts.get(ip);
 
   if (entry && now - entry.windowStart > RATE_LIMIT_WINDOW) {
-    entry = null;
+    entry = undefined;
   }
   if (!entry) {
     entry = { windowStart: now, count: 0 };
@@ -172,7 +203,8 @@ function checkLoginRate(req, res, next) {
 
   entry.count++;
   if (entry.count > RATE_LIMIT_MAX) {
-    return res.status(429).json({ error: "too many attempts, try again later" });
+    res.status(429).json({ error: "too many attempts, try again later" });
+    return;
   }
 
   next();
@@ -187,19 +219,22 @@ setInterval(() => {
 }, 300000).unref();
 
 // ── login endpoint ──
-app.post("/api/login", express.json(), checkLoginRate, (req, res) => {
+app.post("/api/login", express.json(), checkLoginRate, (req: express.Request, res: express.Response) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
-    return res.status(400).json({ error: "username and password required" });
+    res.status(400).json({ error: "username and password required" });
+    return;
   }
 
   if (username !== config.username) {
-    return res.status(401).json({ error: "invalid credentials" });
+    res.status(401).json({ error: "invalid credentials" });
+    return;
   }
 
   if (password !== config.password) {
-    return res.status(401).json({ error: "invalid credentials" });
+    res.status(401).json({ error: "invalid credentials" });
+    return;
   }
 
   const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: "24h" });
@@ -207,7 +242,7 @@ app.post("/api/login", express.json(), checkLoginRate, (req, res) => {
 });
 
 // ── Claude Code config endpoints ──
-app.get("/api/claude-config", requireAuth, (req, res) => {
+app.get("/api/claude-config", requireAuth, (req: AuthenticatedRequest, res: express.Response) => {
   const cfg = getClaudeConfig();
   res.json({
     configured: isClaudeConfigured(),
@@ -219,17 +254,19 @@ app.get("/api/claude-config", requireAuth, (req, res) => {
   });
 });
 
-app.post("/api/claude-config", requireAuth, express.json(), (req, res) => {
+app.post("/api/claude-config", requireAuth, express.json(), (req: AuthenticatedRequest, res: express.Response) => {
   const { baseUrl, authToken, model, haikuModel, effort } = req.body;
   if (!baseUrl || typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return res.status(400).json({ error: "ANTHROPIC_BASE_URL is required" });
+    res.status(400).json({ error: "ANTHROPIC_BASE_URL is required" });
+    return;
   }
   if (!authToken || typeof authToken !== "string" || !authToken.trim()) {
-    return res.status(400).json({ error: "ANTHROPIC_AUTH_TOKEN is required" });
+    res.status(400).json({ error: "ANTHROPIC_AUTH_TOKEN is required" });
+    return;
   }
 
   try {
-    const cfg = {
+    const cfg: ClaudeConfig = {
       baseUrl: baseUrl.trim(),
       authToken: authToken.trim(),
       model: (model && model.trim()) || "",
@@ -258,29 +295,32 @@ app.post("/api/claude-config", requireAuth, express.json(), (req, res) => {
     fs.writeFileSync(bashrcPath, bashrc + envLines + "\n");
 
     res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to save configuration: " + err.message });
+  } catch (err: unknown) {
+    res.status(500).json({ error: "Failed to save configuration: " + (err as Error).message });
   }
 });
 
 // ── protected API routes ──
-app.get("/api/files", requireAuth, async (req, res) => {
-  let dir = req.query.dir || USER_WORK_DIR;
+app.get("/api/files", requireAuth, async (req: AuthenticatedRequest, res: express.Response) => {
+  let dir = (req.query.dir as string) || USER_WORK_DIR;
   dir = path.resolve(dir);
 
   if (!isPathWithinUserDir(dir)) {
-    return res.status(403).json({ error: "access denied: path outside work directory" });
+    res.status(403).json({ error: "access denied: path outside work directory" });
+    return;
   }
 
-  let stat;
+  let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(dir);
   } catch {
-    return res.status(404).json({ error: "directory not found" });
+    res.status(404).json({ error: "directory not found" });
+    return;
   }
 
   if (!stat.isDirectory()) {
-    return res.status(400).json({ error: "not a directory" });
+    res.status(400).json({ error: "not a directory" });
+    return;
   }
 
   try {
@@ -291,7 +331,7 @@ app.get("/api/files", requireAuth, async (req, res) => {
         .map(async (d) => {
           const isFile = d.isFile();
           const isDirectory = d.isDirectory();
-          let size = null;
+          let size: number | null = null;
           if (isFile) {
             try {
               const s = await fs.promises.stat(path.join(dir, d.name));
@@ -304,60 +344,67 @@ app.get("/api/files", requireAuth, async (req, res) => {
         })
     );
     res.json({ dir, entries: entries.filter(Boolean), workDir: USER_WORK_DIR });
-  } catch (err) {
+  } catch {
     res.status(403).json({ error: "permission denied" });
   }
 });
 
-app.delete("/api/files", requireAuth, async (req, res) => {
-  const filePath = req.query.path;
+app.delete("/api/files", requireAuth, async (req: AuthenticatedRequest, res: express.Response) => {
+  const filePath = req.query.path as string;
 
   if (!filePath) {
-    return res.status(400).json({ error: "missing path" });
+    res.status(400).json({ error: "missing path" });
+    return;
   }
 
   const resolved = path.resolve(filePath);
 
   if (!isPathWithinUserDir(resolved)) {
-    return res.status(403).json({ error: "access denied: path outside work directory" });
+    res.status(403).json({ error: "access denied: path outside work directory" });
+    return;
   }
 
   try {
     await fs.promises.stat(resolved);
   } catch {
-    return res.status(404).json({ error: "file not found" });
+    res.status(404).json({ error: "file not found" });
+    return;
   }
 
   try {
     await fs.promises.rm(resolved, { recursive: true });
     res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
+  } catch (err: unknown) {
+    res.status(500).json({ error: (err as Error).message });
   }
 });
 
-app.get("/download", requireAuth, async (req, res) => {
-  const filePath = req.query.path;
+app.get("/download", requireAuth, async (req: AuthenticatedRequest, res: express.Response) => {
+  const filePath = req.query.path as string;
 
   if (!filePath) {
-    return res.status(400).send("missing path");
+    res.status(400).send("missing path");
+    return;
   }
 
   const resolved = path.resolve(filePath);
 
   if (!isPathWithinUserDir(resolved)) {
-    return res.status(403).send("access denied: path outside work directory");
+    res.status(403).send("access denied: path outside work directory");
+    return;
   }
 
-  let stat;
+  let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(resolved);
   } catch {
-    return res.status(404).send("file not found");
+    res.status(404).send("file not found");
+    return;
   }
 
   if (!stat.isFile()) {
-    return res.status(400).send("not a file");
+    res.status(400).send("not a file");
+    return;
   }
 
   return res.download(resolved);
@@ -365,21 +412,26 @@ app.get("/download", requireAuth, async (req, res) => {
 
 // ── ring buffer ──
 class RingBuffer {
-  constructor(maxSize) {
+  maxSize: number;
+  chunks: Buffer[];
+  startIdx: number;
+  totalSize: number;
+
+  constructor(maxSize: number) {
     this.maxSize = maxSize;
     this.chunks = [];
     this.startIdx = 0;
     this.totalSize = 0;
   }
 
-  push(data) {
+  push(data: Buffer | string): void {
     const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
     this.chunks.push(chunk);
     this.totalSize += chunk.length;
     this._evict();
   }
 
-  _evict() {
+  _evict(): void {
     while (this.totalSize > this.maxSize && this.chunks.length - this.startIdx > 1) {
       this.totalSize -= this.chunks[this.startIdx].length;
       this.startIdx++;
@@ -390,14 +442,14 @@ class RingBuffer {
     }
   }
 
-  *iterChunks() {
+  *iterChunks(): Generator<Buffer> {
     for (let i = this.startIdx; i < this.chunks.length; i++) {
       yield this.chunks[i];
     }
   }
 
-  get length() { return this.chunks.length - this.startIdx; }
-  get size() { return this.totalSize; }
+  get length(): number { return this.chunks.length - this.startIdx; }
+  get size(): number { return this.totalSize; }
 }
 
 // ── binary protocol helpers ──
@@ -407,8 +459,8 @@ const MSG_RESIZE = 0x03;
 const MSG_CONNECTED = 0x04;
 const MSG_BATCH_OUTPUT = 0x05;
 
-function getPositiveIntEnv(name, fallback) {
-  const value = Number.parseInt(process.env[name], 10);
+function getPositiveIntEnv(name: string, fallback: number): number {
+  const value = Number.parseInt(process.env[name]!, 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
@@ -418,11 +470,11 @@ const WS_BACKPRESSURE_LIMIT_BYTES = getPositiveIntEnv("TERMCLOUD_WS_BACKPRESSURE
 const WS_COMPRESSION_THRESHOLD_BYTES = getPositiveIntEnv("TERMCLOUD_WS_COMPRESSION_THRESHOLD_BYTES", 1024);
 const SESSION_IDLE_TIMEOUT_MS = getPositiveIntEnv("TERMCLOUD_SESSION_IDLE_TIMEOUT_MS", 10 * 60 * 1000);
 
-function toPayloadBuffer(data) {
+function toPayloadBuffer(data: Buffer | string): Buffer {
   return Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8");
 }
 
-function encodeOutput(data) {
+function encodeOutput(data: Buffer | string): Buffer {
   const payload = toPayloadBuffer(data);
   const frame = Buffer.alloc(1 + payload.length);
   frame[0] = MSG_OUTPUT;
@@ -430,7 +482,7 @@ function encodeOutput(data) {
   return frame;
 }
 
-function encodeBatchOutput(chunks) {
+function encodeBatchOutput(chunks: (Buffer | string)[]): Buffer {
   const bufs = chunks.map(toPayloadBuffer);
   const totalLen = bufs.reduce((sum, b) => sum + b.length, 0);
   const frame = Buffer.alloc(1 + totalLen);
@@ -444,9 +496,9 @@ function encodeBatchOutput(chunks) {
 }
 
 // ── terminal session management ──
-const sessions = new Map();
+const sessions = new Map<string, TerminalSession>();
 
-function getOrCreateSession(username) {
+function getOrCreateSession(username: string): TerminalSession {
   const existing = sessions.get(username);
   if (existing && !existing.exited) return existing;
 
@@ -459,7 +511,7 @@ function getOrCreateSession(username) {
     env: createTerminalEnv()
   });
 
-  const session = {
+  const session: TerminalSession = {
     username,
     pty: ptyProcess,
     buffer: new RingBuffer(REPLAY_BUFFER_BYTES),
@@ -475,7 +527,7 @@ function getOrCreateSession(username) {
   // \x1b[/1;2c (VT102-style with '/' intermediate), which xterm.js doesn't consume.
   const DA_RESPONSE_RE = /\x1b\[[\x20-\x2f]*[\x30-\x3f]*c/g;
 
-  ptyProcess.onData((data) => {
+  ptyProcess.onData((data: string) => {
     data = data.replace(DA_RESPONSE_RE, "");
     if (!data) return;
 
@@ -509,18 +561,18 @@ function getOrCreateSession(username) {
   return session;
 }
 
-function clearPendingBatch(session) {
+function clearPendingBatch(session: TerminalSession): void {
   session.batchPending = false;
   session.batchAccumulator = [];
 }
 
-function cancelSessionIdleCleanup(session) {
+function cancelSessionIdleCleanup(session: TerminalSession): void {
   if (!session.idleTimer) return;
   clearTimeout(session.idleTimer);
   session.idleTimer = null;
 }
 
-function scheduleSessionIdleCleanup(session) {
+function scheduleSessionIdleCleanup(session: TerminalSession): void {
   if (session.exited || session.clients.size > 0 || session.idleTimer) return;
 
   clearPendingBatch(session);
@@ -544,7 +596,7 @@ function scheduleSessionIdleCleanup(session) {
   session.idleTimer.unref();
 }
 
-function detachClient(session, ws) {
+function detachClient(session: TerminalSession, ws: WebSocket): void {
   const removed = session.clients.delete(ws);
   if (!removed) return;
 
@@ -553,7 +605,7 @@ function detachClient(session, ws) {
   }
 }
 
-function closeSlowClient(session, ws) {
+function closeSlowClient(session: TerminalSession, ws: WebSocket): void {
   detachClient(session, ws);
   try {
     ws.close(4002, "client too slow");
@@ -562,7 +614,7 @@ function closeSlowClient(session, ws) {
   }
 }
 
-function sendFrameToClient(session, ws, frame) {
+function sendFrameToClient(session: TerminalSession, ws: WebSocket, frame: Buffer): boolean {
   if (ws.readyState !== WebSocket.OPEN) {
     detachClient(session, ws);
     return false;
@@ -573,17 +625,17 @@ function sendFrameToClient(session, ws, frame) {
     return false;
   }
 
-  ws.send(frame, (err) => {
+  ws.send(frame, (err?: Error) => {
     if (err) detachClient(session, ws);
   });
   return true;
 }
 
-function sendReplayBuffer(session, ws) {
-  let batch = [];
+function sendReplayBuffer(session: TerminalSession, ws: WebSocket): void {
+  let batch: Buffer[] = [];
   let batchSize = 0;
 
-  const flush = () => {
+  const flush = (): boolean => {
     if (batch.length === 0) return true;
     const frame = batch.length === 1 ? encodeOutput(batch[0]) : encodeBatchOutput(batch);
     batch = [];
@@ -603,9 +655,9 @@ function sendReplayBuffer(session, ws) {
 }
 
 // ── batch flush (16ms ≈ 60Hz) ──
-let batchFlushTimer = null;
+let batchFlushTimer: NodeJS.Timeout | null = null;
 
-function startBatchFlush() {
+function startBatchFlush(): void {
   if (batchFlushTimer) return;
   batchFlushTimer = setInterval(() => {
     for (const session of sessions.values()) {
@@ -629,7 +681,7 @@ function startBatchFlush() {
       (session) => session.batchPending && session.clients.size > 0
     );
     if (!hasPendingWork) {
-      clearInterval(batchFlushTimer);
+      clearInterval(batchFlushTimer!);
       batchFlushTimer = null;
     }
   }, 16);
@@ -647,32 +699,32 @@ const wss = new WebSocket.Server({
     threshold: WS_COMPRESSION_THRESHOLD_BYTES
   },
   verifyClient: (info, callback) => {
-    const url = new URL(info.req.url, "http://localhost");
+    const url = new URL(info.req.url!, "http://localhost");
     const token = url.searchParams.get("token");
     if (!token) {
       return callback(false, 401, "Unauthorized");
     }
-    let decoded;
+    let decoded: jwt.JwtPayload;
     try {
-      decoded = jwt.verify(token, JWT_SECRET);
-    } catch (err) {
+      decoded = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload;
+    } catch {
       return callback(false, 401, "Unauthorized");
     }
-    info.req.user = decoded;
+    (info.req as unknown as { user: jwt.JwtPayload }).user = decoded;
     return callback(true);
   }
 });
 
 wss.on("connection", (ws, req) => {
-  const username = req.user.username;
-  let session;
+  const username = ((req as unknown as { user: { username: string } }).user).username;
+  let session: TerminalSession;
 
   try {
     session = getOrCreateSession(username);
-  } catch (err) {
+  } catch (err: unknown) {
     console.error("Failed to start terminal session:", err);
     if (ws.readyState === WebSocket.OPEN) {
-      const message = `\r\nFailed to start terminal session: ${err.message || "unknown error"}\r\n`;
+      const message = `\r\nFailed to start terminal session: ${(err as Error).message || "unknown error"}\r\n`;
       ws.send(encodeOutput(message), () => {
         ws.close(4004, "terminal unavailable");
       });
@@ -695,10 +747,10 @@ wss.on("connection", (ws, req) => {
     sendReplayBuffer(session, ws);
   }
 
-  ws.on("message", (message) => {
+  ws.on("message", (message: WebSocket.Data) => {
     if (session.exited) return;
 
-    const buf = Buffer.from(message);
+    const buf = Buffer.from(message as ArrayBuffer);
     if (buf.length < 1) return;
 
     const msgType = buf[0];
@@ -712,7 +764,7 @@ wss.on("connection", (ws, req) => {
         const cols = buf.readUInt16LE(1);
         const rows = buf.readUInt16LE(3);
         session.pty.resize(cols, rows);
-      } catch (err) {
+      } catch {
         // fd may have closed between messages
       }
     }
@@ -728,6 +780,5 @@ wss.on("connection", (ws, req) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  // eslint-disable-next-line no-console
   console.log(`Web Linux Console running at http://0.0.0.0:${PORT}`);
 });

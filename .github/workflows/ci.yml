@@ -23,5 +23,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check TypeScript compilation
+        run: npx tsc --noEmit
+
+      - name: Build client bundle
+        run: npm run build:client
+
       - name: Run validation
         run: npm test
