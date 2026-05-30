@@ -10,15 +10,29 @@
   function clearToken() {
     localStorage.removeItem("token");
   }
+  var currentSession = { username: "", isAdmin: false };
+  function setCurrentSession(username, isAdmin) {
+    currentSession = {
+      username: username || "",
+      isAdmin: Boolean(isAdmin)
+    };
+    const publicEnvBtn = document.getElementById("public-env-btn");
+    if (publicEnvBtn) {
+      publicEnvBtn.style.display = currentSession.isAdmin ? "flex" : "none";
+    }
+  }
   function showLogin() {
+    setCurrentSession();
     const loginOverlay = document.getElementById("login-overlay");
     loginOverlay.style.display = "flex";
     document.getElementById("claude-config-overlay").style.display = "none";
+    document.getElementById("public-env-overlay").style.display = "none";
     document.getElementById("app-container").style.display = "none";
   }
   function showClaudeConfig() {
     document.getElementById("login-overlay").style.display = "none";
     document.getElementById("claude-config-overlay").style.display = "flex";
+    document.getElementById("public-env-overlay").style.display = "none";
     document.getElementById("app-container").style.display = "none";
     document.getElementById("cc-base-url").focus();
   }
@@ -38,6 +52,51 @@
     });
     document.getElementById("cc-base-url").focus();
   });
+  document.getElementById("public-env-btn").addEventListener("click", () => {
+    if (!currentSession.isAdmin) return;
+    document.getElementById("public-env-overlay").style.display = "flex";
+    document.getElementById("public-env-error").textContent = "";
+    fetchWithAuth("/api/public-env").then((r) => {
+      if (!r.ok) return r.json().then((e) => {
+        throw new Error(e.error || "\u52A0\u8F7D\u5931\u8D25");
+      });
+      return r.json();
+    }).then((data) => {
+      document.getElementById("public-env-text").value = data.text || "";
+      document.getElementById("public-env-text").focus();
+    }).catch((err) => {
+      document.getElementById("public-env-error").textContent = err.message || "\u52A0\u8F7D\u5931\u8D25";
+    });
+  });
+  function closePublicEnvOverlay() {
+    document.getElementById("public-env-overlay").style.display = "none";
+  }
+  function handlePublicEnv(event) {
+    event.preventDefault();
+    if (!currentSession.isAdmin) return;
+    const text = document.getElementById("public-env-text").value;
+    const errorEl = document.getElementById("public-env-error");
+    errorEl.textContent = "";
+    fetchWithAuth("/api/public-env", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    }).then((r) => {
+      if (!r.ok) return r.json().then((e) => {
+        throw new Error(e.error || "\u4FDD\u5B58\u5931\u8D25");
+      });
+      return r.json();
+    }).then((data) => {
+      if (data.ok) {
+        document.getElementById("public-env-text").value = data.text || "";
+        closePublicEnvOverlay();
+      } else {
+        errorEl.textContent = "\u4FDD\u5B58\u5931\u8D25";
+      }
+    }).catch((err) => {
+      errorEl.textContent = err.message || "\u7F51\u7EDC\u9519\u8BEF";
+    });
+  }
   document.getElementById("plugin-install-btn").addEventListener("click", () => {
     document.getElementById("plugin-overlay").style.display = "flex";
   });
@@ -74,7 +133,9 @@
   function showApp() {
     document.getElementById("login-overlay").style.display = "none";
     document.getElementById("claude-config-overlay").style.display = "none";
+    document.getElementById("public-env-overlay").style.display = "none";
     document.getElementById("app-container").style.display = "flex";
+    setCurrentSession(currentSession.username, currentSession.isAdmin);
     initTerminal();
     loadFiles("");
   }
@@ -91,7 +152,8 @@
     }).then((r) => r.json()).then((data) => {
       if (data.token) {
         setToken(data.token);
-        if (!data.claudeConfigured) {
+        setCurrentSession(data.username, data.isAdmin);
+        if (!data.claudeConfigured && !data.isAdmin) {
           showClaudeConfig();
         } else {
           showApp();
@@ -441,13 +503,16 @@
   }
   document.getElementById("login-form").addEventListener("submit", handleLogin);
   document.getElementById("claude-config-form").addEventListener("submit", handleClaudeConfig);
+  document.getElementById("public-env-form").addEventListener("submit", handlePublicEnv);
   document.querySelector(".poe-skip-btn").addEventListener("click", skipClaudeConfig);
+  document.querySelector(".public-env-close-btn").addEventListener("click", closePublicEnvOverlay);
   document.querySelector(".plugin-close-btn").addEventListener("click", closePluginOverlay);
   (() => {
     const token = getToken();
     if (token) {
       fetchWithAuth("/api/claude-config").then((r) => r.json()).then((data) => {
-        if (data.configured) {
+        setCurrentSession(data.username, data.isAdmin);
+        if (data.configured || data.isAdmin) {
           showApp();
         } else {
           showClaudeConfig();

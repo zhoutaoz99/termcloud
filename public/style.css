@@ -78,7 +78,8 @@ select:focus-visible {
 
 /* ── shared dialogs ── */
 #login-overlay,
-#claude-config-overlay {
+#claude-config-overlay,
+#public-env-overlay {
   position: fixed;
   inset: 0;
   background:
@@ -92,6 +93,7 @@ select:focus-visible {
 
 #login-box,
 #claude-config-box,
+#public-env-box,
 #plugin-box {
   width: 380px;
   background: var(--panel);
@@ -107,6 +109,10 @@ select:focus-visible {
   overflow-y: auto;
 }
 
+#public-env-box {
+  width: min(560px, calc(100vw - 32px));
+}
+
 .dialog-kicker {
   margin-bottom: 8px;
   color: var(--accent-strong);
@@ -118,6 +124,7 @@ select:focus-visible {
 
 #login-box h2,
 #claude-config-box h2,
+#public-env-box h2,
 #plugin-box h2 {
   margin: 0 0 22px;
   color: var(--text);
@@ -127,7 +134,8 @@ select:focus-visible {
 }
 
 #login-box label,
-#claude-config-box label {
+#claude-config-box label,
+#public-env-box label {
   display: block;
   color: var(--text-soft);
   font-size: 13px;
@@ -142,9 +150,9 @@ select:focus-visible {
 #login-box input[type="password"],
 #claude-config-box input[type="text"],
 #claude-config-box input[type="password"],
-#claude-config-box select {
+#claude-config-box select,
+#public-env-box textarea {
   width: 100%;
-  height: 40px;
   padding: 9px 12px;
   margin-bottom: 15px;
   border: 1px solid var(--line);
@@ -156,10 +164,25 @@ select:focus-visible {
   transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
 
+#login-box input[type="text"],
+#login-box input[type="password"],
+#claude-config-box input[type="text"],
+#claude-config-box input[type="password"],
+#claude-config-box select {
+  height: 40px;
+}
+
+#public-env-box textarea {
+  min-height: 260px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
 #login-box input[type="text"]:focus,
 #login-box input[type="password"]:focus,
 #claude-config-box input:focus,
-#claude-config-box select:focus {
+#claude-config-box select:focus,
+#public-env-box textarea:focus {
   border-color: var(--accent);
   background: #0d1014;
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -167,11 +190,13 @@ select:focus-visible {
 
 #claude-config-box input[type="text"],
 #claude-config-box input[type="password"],
-#claude-config-box select {
+#claude-config-box select,
+#public-env-box textarea {
   font-family: "TermMono", ui-monospace, monospace;
 }
 
-#claude-config-box input::placeholder {
+#claude-config-box input::placeholder,
+#public-env-box textarea::placeholder {
   color: #636c76;
 }
 
@@ -191,6 +216,7 @@ select:focus-visible {
 
 #login-box button[type="submit"],
 #claude-config-form button[type="submit"],
+#public-env-form button[type="submit"],
 .plugin-install-action {
   border: 1px solid rgba(52, 211, 153, 0.55);
   border-radius: 6px;
@@ -203,7 +229,8 @@ select:focus-visible {
 }
 
 #login-box button[type="submit"],
-#claude-config-form button[type="submit"] {
+#claude-config-form button[type="submit"],
+#public-env-form button[type="submit"] {
   width: 100%;
   height: 40px;
   margin-top: 4px;
@@ -211,6 +238,7 @@ select:focus-visible {
 
 #login-box button[type="submit"]:hover,
 #claude-config-form button[type="submit"]:hover,
+#public-env-form button[type="submit"]:hover,
 .plugin-install-action:hover {
   background: var(--accent-strong);
   border-color: var(--accent-strong);
@@ -218,11 +246,13 @@ select:focus-visible {
 
 #login-box button[type="submit"]:active,
 #claude-config-form button[type="submit"]:active,
+#public-env-form button[type="submit"]:active,
 .plugin-install-action:active {
   transform: translateY(1px);
 }
 
 .poe-skip-btn,
+.public-env-close-btn,
 .plugin-close-btn {
   width: 100%;
   height: 36px;
@@ -237,6 +267,7 @@ select:focus-visible {
 }
 
 .poe-skip-btn:hover,
+.public-env-close-btn:hover,
 .plugin-close-btn:hover {
   background: var(--panel-strong);
   border-color: var(--line-strong);
@@ -244,7 +275,8 @@ select:focus-visible {
 }
 
 #login-error,
-#claude-config-error {
+#claude-config-error,
+#public-env-error {
   color: var(--danger);
   font-size: 13px;
   text-align: left;
@@ -509,6 +541,7 @@ select:focus-visible {
 }
 
 #claude-config-btn,
+#public-env-btn,
 #plugin-install-btn {
   width: 100%;
   height: 36px;
@@ -528,6 +561,7 @@ select:focus-visible {
 }
 
 #claude-config-btn:hover,
+#public-env-btn:hover,
 #plugin-install-btn:hover {
   color: var(--text);
   background: var(--panel-strong);

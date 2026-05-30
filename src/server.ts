@@ -23,6 +23,15 @@ interface ClaudeConfig {
   effort?: string;
 }
 
+interface EnvVariable {
+  name: string;
+  value: string;
+}
+
+interface PublicEnvConfig {
+  variables: EnvVariable[];
+}
+
 interface AuthenticatedRequest extends express.Request {
   user?: { username: string };
 }
@@ -89,14 +98,38 @@ if (usersMap.size === 0) {
 
 console.log(`Loaded ${usersMap.size} user(s): ${[...usersMap.keys()].join(", ")}`);
 
-// ── per-user work directory ──
+// ── data directories ──
+let dataRootCache: string | null = null;
 const userWorkDirCache = new Map<string, string>();
+
+function getDataRootDir(): string {
+  if (dataRootCache) return dataRootCache;
+
+  const preferred = "/data";
+  try {
+    if (!fs.existsSync(preferred)) {
+      fs.mkdirSync(preferred, { recursive: true });
+    }
+    fs.accessSync(preferred, fs.constants.W_OK);
+    dataRootCache = preferred;
+    return preferred;
+  } catch {
+    const fallback = path.join(os.homedir(), ".termcloud-data");
+    if (!fs.existsSync(fallback)) {
+      fs.mkdirSync(fallback, { recursive: true });
+    }
+    fs.accessSync(fallback, fs.constants.W_OK);
+    console.warn(`Cannot create ${preferred}, using fallback: ${fallback}`);
+    dataRootCache = fallback;
+    return fallback;
+  }
+}
 
 function getUserWorkDir(username: string): string {
   const cached = userWorkDirCache.get(username);
   if (cached) return cached;
 
-  const preferred = path.join("/data/users", username);
+  const preferred = path.join(getDataRootDir(), "users", username);
   try {
     if (!fs.existsSync(preferred)) {
       fs.mkdirSync(preferred, { recursive: true });
@@ -137,6 +170,10 @@ function getDefaultUtf8Locale(): string {
   return process.platform === "darwin" ? "en_US.UTF-8" : "C.UTF-8";
 }
 
+function isAdminUser(username: string): boolean {
+  return username === "admin" && usersMap.has(username);
+}
+
 function getClaudeConfigPath(username: string): string {
   return path.join(getUserWorkDir(username), ".claude_code_config.json");
 }
@@ -155,24 +192,163 @@ function getClaudeConfig(username: string): ClaudeConfig {
   }
 }
 
+const PUBLIC_ENV_PATH = path.join(getDataRootDir(), "public_env.json");
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const RESERVED_PUBLIC_ENV_NAMES = new Set(["HOME", "TERM", "COLORTERM", "PWD", "OLDPWD"]);
+
+class PublicEnvValidationError extends Error {}
+
+function assertPublicEnvName(name: string, line?: number): void {
+  if (!ENV_NAME_RE.test(name)) {
+    throw new PublicEnvValidationError(`${line ? `Line ${line}: ` : ""}invalid environment variable name '${name}'`);
+  }
+  if (RESERVED_PUBLIC_ENV_NAMES.has(name)) {
+    throw new PublicEnvValidationError(`${line ? `Line ${line}: ` : ""}${name} is managed by TermCloud`);
+  }
+}
+
+function assertPublicEnvValue(value: string, name: string, line?: number): void {
+  if (/[\0\r\n]/.test(value)) {
+    throw new PublicEnvValidationError(`${line ? `Line ${line}: ` : ""}${name} value cannot contain newlines or null bytes`);
+  }
+}
+
+function unquotePublicEnvValue(value: string, name: string, line: number): string {
+  if (!value) return "";
+  const first = value[0];
+  const last = value[value.length - 1];
+  if (first !== "\"" && first !== "'") return value;
+  if (last !== first || value.length < 2) {
+    throw new PublicEnvValidationError(`Line ${line}: ${name} has an unterminated quoted value`);
+  }
+  if (first === "'") return value.slice(1, -1);
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (typeof parsed !== "string") {
+      throw new Error("not a string");
+    }
+    return parsed;
+  } catch {
+    throw new PublicEnvValidationError(`Line ${line}: ${name} has an invalid quoted value`);
+  }
+}
+
+function parsePublicEnvText(text: string): EnvVariable[] {
+  const variables: EnvVariable[] = [];
+  const seen = new Set<string>();
+
+  text.split(/\r?\n/).forEach((rawLine, index) => {
+    const lineNumber = index + 1;
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#")) return;
+
+    const assignment = trimmed.startsWith("export ") ? trimmed.slice(7).trim() : trimmed;
+    const separator = assignment.indexOf("=");
+    if (separator <= 0) {
+      throw new PublicEnvValidationError(`Line ${lineNumber}: expected KEY=VALUE`);
+    }
+
+    const name = assignment.slice(0, separator).trim();
+    const value = unquotePublicEnvValue(assignment.slice(separator + 1).trim(), name, lineNumber);
+    assertPublicEnvName(name, lineNumber);
+    assertPublicEnvValue(value, name, lineNumber);
+    if (seen.has(name)) {
+      throw new PublicEnvValidationError(`Line ${lineNumber}: duplicate variable '${name}'`);
+    }
+    seen.add(name);
+    variables.push({ name, value });
+  });
+
+  return variables;
+}
+
+function formatPublicEnvValue(value: string): string {
+  if (value === "" || /[\s"'#]/.test(value)) {
+    return JSON.stringify(value);
+  }
+  return value;
+}
+
+function publicEnvToText(variables: EnvVariable[]): string {
+  return variables.map((variable) => `${variable.name}=${formatPublicEnvValue(variable.value)}`).join("\n");
+}
+
+function normalizeStoredPublicEnvVariables(raw: unknown): EnvVariable[] {
+  if (!raw || typeof raw !== "object") return [];
+  const maybeVariables = (raw as Partial<PublicEnvConfig>).variables;
+  if (!Array.isArray(maybeVariables)) return [];
+
+  const variables: EnvVariable[] = [];
+  const seen = new Set<string>();
+  for (const entry of maybeVariables) {
+    if (!entry || typeof entry !== "object") continue;
+    const name = (entry as Partial<EnvVariable>).name;
+    const value = (entry as Partial<EnvVariable>).value;
+    if (typeof name !== "string" || typeof value !== "string") continue;
+    if (!ENV_NAME_RE.test(name) || RESERVED_PUBLIC_ENV_NAMES.has(name) || seen.has(name)) continue;
+    if (/[\0\r\n]/.test(value)) continue;
+    seen.add(name);
+    variables.push({ name, value });
+  }
+  return variables;
+}
+
+function getPublicEnvVariables(): EnvVariable[] {
+  if (!fs.existsSync(PUBLIC_ENV_PATH)) return [];
+  try {
+    return normalizeStoredPublicEnvVariables(JSON.parse(fs.readFileSync(PUBLIC_ENV_PATH, "utf8")) as unknown);
+  } catch {
+    return [];
+  }
+}
+
+function getPublicEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const variable of getPublicEnvVariables()) {
+    env[variable.name] = variable.value;
+  }
+  return env;
+}
+
+function savePublicEnvVariables(variables: EnvVariable[]): void {
+  fs.writeFileSync(PUBLIC_ENV_PATH, JSON.stringify({ variables }, null, 2));
+}
+
+function hasPublicClaudeDefaults(): boolean {
+  const env = getPublicEnv();
+  return Boolean(env.ANTHROPIC_AUTH_TOKEN || env.ANTHROPIC_API_KEY);
+}
+
+function isEffectiveClaudeConfigured(username: string): boolean {
+  return isClaudeConfigured(username) || hasPublicClaudeDefaults();
+}
+
+function applyClaudeConfigToEnv(env: NodeJS.ProcessEnv, cfg: ClaudeConfig): void {
+  if (cfg.baseUrl) env.ANTHROPIC_BASE_URL = cfg.baseUrl;
+  if (cfg.authToken) env.ANTHROPIC_AUTH_TOKEN = cfg.authToken;
+  env.ANTHROPIC_API_KEY = "";
+  if (cfg.model) env.ANTHROPIC_MODEL = cfg.model;
+  if (cfg.haikuModel) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = cfg.haikuModel;
+  if (cfg.effort) env.CLAUDE_CODE_EFFORT_LEVEL = cfg.effort;
+}
+
+function quoteForBash(value: string): string {
+  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
+}
+
 function createTerminalEnv(username: string): NodeJS.ProcessEnv {
   const userDir = getUserWorkDir(username);
   const fallbackLocale = process.env.TERMCLOUD_UTF8_LOCALE || getDefaultUtf8Locale();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...getPublicEnv(),
     TERM: "xterm-256color",
     COLORTERM: process.env.COLORTERM || "truecolor",
     HOME: userDir
   };
 
   if (isClaudeConfigured(username)) {
-    const cfg = getClaudeConfig(username);
-    if (cfg.baseUrl) env.ANTHROPIC_BASE_URL = cfg.baseUrl;
-    if (cfg.authToken) env.ANTHROPIC_AUTH_TOKEN = cfg.authToken;
-    env.ANTHROPIC_API_KEY = "";
-    if (cfg.model) env.ANTHROPIC_MODEL = cfg.model;
-    if (cfg.haikuModel) env.ANTHROPIC_DEFAULT_HAIKU_MODEL = cfg.haikuModel;
-    if (cfg.effort) env.CLAUDE_CODE_EFFORT_LEVEL = cfg.effort;
+    applyClaudeConfigToEnv(env, getClaudeConfig(username));
   }
 
   const activeLocale = env.LC_ALL || env.LC_CTYPE || env.LANG;
@@ -224,6 +400,15 @@ function requireAuth(req: AuthenticatedRequest, res: express.Response, next: exp
   } catch {
     res.status(401).json({ error: "unauthorized" });
   }
+}
+
+function requireAdmin(req: AuthenticatedRequest, res: express.Response, next: express.NextFunction): void {
+  const username = req.user?.username;
+  if (!username || !isAdminUser(username)) {
+    res.status(403).json({ error: "admin required" });
+    return;
+  }
+  next();
 }
 
 // ── login rate limiter ──
@@ -282,7 +467,12 @@ app.post("/api/login", express.json(), checkLoginRate, (req: express.Request, re
   }
 
   const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: "24h" });
-  res.json({ token, claudeConfigured: isClaudeConfigured(username) });
+  res.json({
+    token,
+    username,
+    isAdmin: isAdminUser(username),
+    claudeConfigured: isEffectiveClaudeConfigured(username)
+  });
 });
 
 // ── Claude Code config endpoints ──
@@ -290,7 +480,11 @@ app.get("/api/claude-config", requireAuth, (req: AuthenticatedRequest, res: expr
   const username = req.user!.username;
   const cfg = getClaudeConfig(username);
   res.json({
-    configured: isClaudeConfigured(username),
+    username,
+    isAdmin: isAdminUser(username),
+    configured: isEffectiveClaudeConfigured(username),
+    userConfigured: isClaudeConfigured(username),
+    usingPublicDefaults: !isClaudeConfigured(username) && hasPublicClaudeDefaults(),
     baseUrl: cfg.baseUrl || "",
     authToken: cfg.authToken || "",
     model: cfg.model || "",
@@ -326,12 +520,12 @@ app.post("/api/claude-config", requireAuth, express.json(), (req: AuthenticatedR
     const envLines = [
       "",
       "# Claude Code configuration",
-      `export ANTHROPIC_BASE_URL="${cfg.baseUrl}"`,
-      `export ANTHROPIC_AUTH_TOKEN="${cfg.authToken}"`,
+      `export ANTHROPIC_BASE_URL=${quoteForBash(cfg.baseUrl || "")}`,
+      `export ANTHROPIC_AUTH_TOKEN=${quoteForBash(cfg.authToken || "")}`,
       'export ANTHROPIC_API_KEY=""',
-      cfg.model ? `export ANTHROPIC_MODEL="${cfg.model}"` : "",
-      cfg.haikuModel ? `export ANTHROPIC_DEFAULT_HAIKU_MODEL="${cfg.haikuModel}"` : "",
-      `export CLAUDE_CODE_EFFORT_LEVEL="${cfg.effort}"`
+      cfg.model ? `export ANTHROPIC_MODEL=${quoteForBash(cfg.model)}` : "",
+      cfg.haikuModel ? `export ANTHROPIC_DEFAULT_HAIKU_MODEL=${quoteForBash(cfg.haikuModel)}` : "",
+      `export CLAUDE_CODE_EFFORT_LEVEL=${quoteForBash(cfg.effort || "max")}`
     ].filter(Boolean).join("\n");
 
     let bashrc = "";
@@ -344,6 +538,29 @@ app.post("/api/claude-config", requireAuth, express.json(), (req: AuthenticatedR
     res.json({ ok: true });
   } catch (err: unknown) {
     res.status(500).json({ error: "Failed to save configuration: " + (err as Error).message });
+  }
+});
+
+// ── public environment variable endpoints ──
+app.get("/api/public-env", requireAuth, requireAdmin, (_req: AuthenticatedRequest, res: express.Response) => {
+  const variables = getPublicEnvVariables();
+  res.json({ variables, text: publicEnvToText(variables) });
+});
+
+app.post("/api/public-env", requireAuth, requireAdmin, express.json(), (req: AuthenticatedRequest, res: express.Response) => {
+  const text = req.body?.text;
+  if (typeof text !== "string") {
+    res.status(400).json({ error: "text is required" });
+    return;
+  }
+
+  try {
+    const variables = parsePublicEnvText(text);
+    savePublicEnvVariables(variables);
+    res.json({ ok: true, variables, text: publicEnvToText(variables) });
+  } catch (err: unknown) {
+    const status = err instanceof PublicEnvValidationError ? 400 : 500;
+    res.status(status).json({ error: (err as Error).message || "Failed to save public environment" });
   }
 });
 

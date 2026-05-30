@@ -3,3 +3,4 @@ npm-debug.log*
 .DS_Store
 config.json
 .jwt_secret
+dist/

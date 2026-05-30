@@ -11,16 +11,37 @@ function clearToken(): void {
   localStorage.removeItem("token");
 }
 
+interface SessionState {
+  username: string;
+  isAdmin: boolean;
+}
+
+let currentSession: SessionState = { username: "", isAdmin: false };
+
+function setCurrentSession(username?: string, isAdmin?: boolean): void {
+  currentSession = {
+    username: username || "",
+    isAdmin: Boolean(isAdmin)
+  };
+  const publicEnvBtn = document.getElementById("public-env-btn");
+  if (publicEnvBtn) {
+    publicEnvBtn.style.display = currentSession.isAdmin ? "flex" : "none";
+  }
+}
+
 function showLogin(): void {
+  setCurrentSession();
   const loginOverlay = document.getElementById("login-overlay")!;
   loginOverlay.style.display = "flex";
   document.getElementById("claude-config-overlay")!.style.display = "none";
+  document.getElementById("public-env-overlay")!.style.display = "none";
   document.getElementById("app-container")!.style.display = "none";
 }
 
 function showClaudeConfig(): void {
   document.getElementById("login-overlay")!.style.display = "none";
   document.getElementById("claude-config-overlay")!.style.display = "flex";
+  document.getElementById("public-env-overlay")!.style.display = "none";
   document.getElementById("app-container")!.style.display = "none";
   (document.getElementById("cc-base-url") as HTMLInputElement).focus();
 }
@@ -50,6 +71,58 @@ document.getElementById("claude-config-btn")!.addEventListener("click", () => {
     .catch(() => { /* ignore */ });
   (document.getElementById("cc-base-url") as HTMLInputElement).focus();
 });
+
+// ── Public environment variables (admin) ──
+document.getElementById("public-env-btn")!.addEventListener("click", () => {
+  if (!currentSession.isAdmin) return;
+  document.getElementById("public-env-overlay")!.style.display = "flex";
+  document.getElementById("public-env-error")!.textContent = "";
+  fetchWithAuth("/api/public-env")
+    .then((r) => {
+      if (!r.ok) return r.json().then((e: { error?: string }) => { throw new Error(e.error || "加载失败"); });
+      return r.json();
+    })
+    .then((data: { text?: string }) => {
+      (document.getElementById("public-env-text") as HTMLTextAreaElement).value = data.text || "";
+      (document.getElementById("public-env-text") as HTMLTextAreaElement).focus();
+    })
+    .catch((err: Error) => {
+      document.getElementById("public-env-error")!.textContent = err.message || "加载失败";
+    });
+});
+
+function closePublicEnvOverlay(): void {
+  document.getElementById("public-env-overlay")!.style.display = "none";
+}
+
+function handlePublicEnv(event: Event): void {
+  event.preventDefault();
+  if (!currentSession.isAdmin) return;
+  const text = (document.getElementById("public-env-text") as HTMLTextAreaElement).value;
+  const errorEl = document.getElementById("public-env-error")!;
+  errorEl.textContent = "";
+
+  fetchWithAuth("/api/public-env", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text })
+  })
+    .then((r) => {
+      if (!r.ok) return r.json().then((e: { error?: string }) => { throw new Error(e.error || "保存失败"); });
+      return r.json();
+    })
+    .then((data: { ok?: boolean; text?: string }) => {
+      if (data.ok) {
+        (document.getElementById("public-env-text") as HTMLTextAreaElement).value = data.text || "";
+        closePublicEnvOverlay();
+      } else {
+        errorEl.textContent = "保存失败";
+      }
+    })
+    .catch((err: Error) => {
+      errorEl.textContent = err.message || "网络错误";
+    });
+}
 
 // ── Plugin install button ──
 document.getElementById("plugin-install-btn")!.addEventListener("click", () => {
@@ -96,7 +169,9 @@ function sendToTerminal(cmd: string): void {
 function showApp(): void {
   document.getElementById("login-overlay")!.style.display = "none";
   document.getElementById("claude-config-overlay")!.style.display = "none";
+  document.getElementById("public-env-overlay")!.style.display = "none";
   document.getElementById("app-container")!.style.display = "flex";
+  setCurrentSession(currentSession.username, currentSession.isAdmin);
   initTerminal();
   loadFiles("");
 }
@@ -115,10 +190,17 @@ function handleLogin(event: Event): void {
     body: JSON.stringify({ username, password })
   })
     .then((r) => r.json())
-    .then((data: { token?: string; error?: string; claudeConfigured?: boolean }) => {
+    .then((data: {
+      token?: string;
+      error?: string;
+      username?: string;
+      isAdmin?: boolean;
+      claudeConfigured?: boolean;
+    }) => {
       if (data.token) {
         setToken(data.token);
-        if (!data.claudeConfigured) {
+        setCurrentSession(data.username, data.isAdmin);
+        if (!data.claudeConfigured && !data.isAdmin) {
           showClaudeConfig();
         } else {
           showApp();
@@ -588,7 +670,9 @@ function pathDir(fullPath: string): string {
 // ── form event bindings ──
 document.getElementById("login-form")!.addEventListener("submit", handleLogin);
 document.getElementById("claude-config-form")!.addEventListener("submit", handleClaudeConfig);
+document.getElementById("public-env-form")!.addEventListener("submit", handlePublicEnv);
 document.querySelector<HTMLButtonElement>(".poe-skip-btn")!.addEventListener("click", skipClaudeConfig);
+document.querySelector<HTMLButtonElement>(".public-env-close-btn")!.addEventListener("click", closePublicEnvOverlay);
 document.querySelector<HTMLButtonElement>(".plugin-close-btn")!.addEventListener("click", closePluginOverlay);
 
 // ── startup: check existing token ──
@@ -597,8 +681,9 @@ document.querySelector<HTMLButtonElement>(".plugin-close-btn")!.addEventListener
   if (token) {
     fetchWithAuth("/api/claude-config")
       .then((r) => r.json())
-      .then((data: { configured?: boolean }) => {
-        if (data.configured) {
+      .then((data: { username?: string; isAdmin?: boolean; configured?: boolean }) => {
+        setCurrentSession(data.username, data.isAdmin);
+        if (data.configured || data.isAdmin) {
           showApp();
         } else {
           showClaudeConfig();

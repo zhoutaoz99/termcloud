@@ -63,6 +63,20 @@
       </div>
     </div>
 
+    <div id="public-env-overlay" style="display:none">
+      <div id="public-env-box">
+        <div class="dialog-kicker">管理员</div>
+        <h2>公共环境变量</h2>
+        <form id="public-env-form">
+          <label for="public-env-text">KEY=VALUE</label>
+          <textarea id="public-env-text" spellcheck="false" placeholder="ANTHROPIC_BASE_URL=https://api.poe.com&#10;ANTHROPIC_AUTH_TOKEN=..."></textarea>
+          <button type="submit">保存</button>
+          <button type="button" class="public-env-close-btn">关闭</button>
+        </form>
+        <div id="public-env-error"></div>
+      </div>
+    </div>
+
     <div id="plugin-overlay" style="display:none">
       <div id="plugin-box">
         <div class="dialog-kicker">扩展</div>
@@ -99,6 +113,7 @@
         </div>
         <div id="sidebar-footer">
           <button id="claude-config-btn" title="配置 Claude Code">⚙ Claude Code 配置</button>
+          <button id="public-env-btn" title="公共环境变量" style="display:none">◇ 公共环境变量</button>
           <button id="plugin-install-btn" title="安装插件">▣ 插件安装</button>
         </div>
 

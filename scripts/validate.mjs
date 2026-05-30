@@ -36,6 +36,7 @@ assert(client.includes('rescaleOverlappingGlyphs: true'), 'client main.ts must p
 assert(client.includes('allowProposedApi: true'), 'client main.ts must set allowProposedApi: true for xterm Unicode11 addon');
 assert(client.includes('binaryType = "arraybuffer"'), 'client main.ts must use binary WebSocket protocol');
 assert(client.includes('MSG_OUTPUT'), 'client main.ts must define binary protocol constants');
+assert(client.includes('public-env-btn'), 'client main.ts must expose admin public environment controls');
 
 // CSS checks
 assert(css.includes('font-variant-ligatures: none'), 'style.css must disable terminal font ligatures');
@@ -56,6 +57,10 @@ const server = fs.readFileSync(path.join(rootDir, 'src', 'server.ts'), 'utf8');
 assert(server.includes('app.get("/download"'), 'server.ts must expose /download endpoint');
 assert(server.includes('new WebSocket.Server'), 'server.ts must create websocket server');
 assert(server.includes('createTerminalEnv'), 'server.ts must normalize terminal environment');
+assert(server.includes('app.get("/api/public-env"'), 'server.ts must expose public environment read endpoint');
+assert(server.includes('app.post("/api/public-env"'), 'server.ts must expose public environment write endpoint');
+assert(server.includes('requireAdmin'), 'server.ts must protect public environment endpoints with admin auth');
+assert(server.includes('...getPublicEnv()'), 'server.ts must merge public environment into terminal sessions');
 assert(server.includes('LC_CTYPE'), 'server.ts must set UTF-8 character width locale for the pty');
 assert(!server.includes('writeFileSync(CONFIG_PATH'), 'server.ts must not rewrite config.json');
 assert(!server.includes('config.jwtSecret'), 'server.ts must not read jwtSecret from config.json');
