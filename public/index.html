@@ -68,8 +68,10 @@
         <div class="dialog-kicker">管理员</div>
         <h2>公共环境变量</h2>
         <form id="public-env-form">
-          <label for="public-env-text">KEY=VALUE</label>
-          <textarea id="public-env-text" spellcheck="false" placeholder="ANTHROPIC_BASE_URL=https://api.poe.com&#10;ANTHROPIC_AUTH_TOKEN=..."></textarea>
+          <label for="public-env-text">export KEY=VALUE</label>
+          <textarea id="public-env-text" spellcheck="false" placeholder="export ANTHROPIC_BASE_URL=&quot;https://api.poe.com&quot;&#10;export ANTHROPIC_AUTH_TOKEN=&quot;$POE_API_KEY&quot;&#10;export ANTHROPIC_API_KEY=&quot;&quot; # Important: Must be explicitly empty">export ANTHROPIC_BASE_URL="https://api.poe.com"
+export ANTHROPIC_AUTH_TOKEN="$POE_API_KEY"
+export ANTHROPIC_API_KEY="" # Important: Must be explicitly empty</textarea>
           <button type="submit">保存</button>
           <button type="button" class="public-env-close-btn">关闭</button>
         </form>

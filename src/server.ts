@@ -26,10 +26,12 @@ interface ClaudeConfig {
 interface EnvVariable {
   name: string;
   value: string;
+  expand?: boolean;
 }
 
 interface PublicEnvConfig {
   variables: EnvVariable[];
+  text?: string;
 }
 
 interface AuthenticatedRequest extends express.Request {
@@ -193,6 +195,11 @@ function getClaudeConfig(username: string): ClaudeConfig {
 }
 
 const PUBLIC_ENV_PATH = path.join(getDataRootDir(), "public_env.json");
+const PUBLIC_ENV_PRESET_TEMPLATE = [
+  'export ANTHROPIC_BASE_URL="https://api.poe.com"',
+  'export ANTHROPIC_AUTH_TOKEN="$POE_API_KEY"',
+  'export ANTHROPIC_API_KEY="" # Important: Must be explicitly empty'
+].join("\n");
 const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RESERVED_PUBLIC_ENV_NAMES = new Set(["HOME", "TERM", "COLORTERM", "PWD", "OLDPWD"]);
 
@@ -213,21 +220,60 @@ function assertPublicEnvValue(value: string, name: string, line?: number): void 
   }
 }
 
-function unquotePublicEnvValue(value: string, name: string, line: number): string {
-  if (!value) return "";
+function stripPublicEnvInlineComment(value: string): string {
+  let quote: "\"" | "'" | null = null;
+  let escaped = false;
+
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (quote === "\"") {
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === "\"") quote = null;
+      continue;
+    }
+
+    if (quote === "'") {
+      if (ch === "'") quote = null;
+      continue;
+    }
+
+    if (ch === "\"" || ch === "'") {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "#" && (i === 0 || /\s/.test(value[i - 1]))) {
+      return value.slice(0, i).trim();
+    }
+  }
+
+  return value.trim();
+}
+
+function unquotePublicEnvValue(value: string, name: string, line: number): EnvVariable {
+  if (!value) return { name, value: "", expand: true };
   const first = value[0];
   const last = value[value.length - 1];
-  if (first !== "\"" && first !== "'") return value;
+  if (first !== "\"" && first !== "'") return { name, value, expand: true };
   if (last !== first || value.length < 2) {
     throw new PublicEnvValidationError(`Line ${line}: ${name} has an unterminated quoted value`);
   }
-  if (first === "'") return value.slice(1, -1);
+  if (first === "'") return { name, value: value.slice(1, -1), expand: false };
   try {
     const parsed = JSON.parse(value) as unknown;
     if (typeof parsed !== "string") {
       throw new Error("not a string");
     }
-    return parsed;
+    return { name, value: parsed, expand: true };
   } catch {
     throw new PublicEnvValidationError(`Line ${line}: ${name} has an invalid quoted value`);
   }
@@ -242,21 +288,29 @@ function parsePublicEnvText(text: string): EnvVariable[] {
     const trimmed = rawLine.trim();
     if (!trimmed || trimmed.startsWith("#")) return;
 
-    const assignment = trimmed.startsWith("export ") ? trimmed.slice(7).trim() : trimmed;
+    if (!trimmed.startsWith("export ")) {
+      throw new PublicEnvValidationError(`Line ${lineNumber}: expected export KEY=VALUE`);
+    }
+
+    const assignment = trimmed.slice(7).trim();
     const separator = assignment.indexOf("=");
     if (separator <= 0) {
-      throw new PublicEnvValidationError(`Line ${lineNumber}: expected KEY=VALUE`);
+      throw new PublicEnvValidationError(`Line ${lineNumber}: expected export KEY=VALUE`);
     }
 
     const name = assignment.slice(0, separator).trim();
-    const value = unquotePublicEnvValue(assignment.slice(separator + 1).trim(), name, lineNumber);
+    const variable = unquotePublicEnvValue(
+      stripPublicEnvInlineComment(assignment.slice(separator + 1)),
+      name,
+      lineNumber
+    );
     assertPublicEnvName(name, lineNumber);
-    assertPublicEnvValue(value, name, lineNumber);
+    assertPublicEnvValue(variable.value, name, lineNumber);
     if (seen.has(name)) {
       throw new PublicEnvValidationError(`Line ${lineNumber}: duplicate variable '${name}'`);
     }
     seen.add(name);
-    variables.push({ name, value });
+    variables.push(variable);
   });
 
   return variables;
@@ -270,7 +324,7 @@ function formatPublicEnvValue(value: string): string {
 }
 
 function publicEnvToText(variables: EnvVariable[]): string {
-  return variables.map((variable) => `${variable.name}=${formatPublicEnvValue(variable.value)}`).join("\n");
+  return variables.map((variable) => `export ${variable.name}=${formatPublicEnvValue(variable.value)}`).join("\n");
 }
 
 function normalizeStoredPublicEnvVariables(raw: unknown): EnvVariable[] {
@@ -284,34 +338,71 @@ function normalizeStoredPublicEnvVariables(raw: unknown): EnvVariable[] {
     if (!entry || typeof entry !== "object") continue;
     const name = (entry as Partial<EnvVariable>).name;
     const value = (entry as Partial<EnvVariable>).value;
+    const expand = (entry as Partial<EnvVariable>).expand;
     if (typeof name !== "string" || typeof value !== "string") continue;
     if (!ENV_NAME_RE.test(name) || RESERVED_PUBLIC_ENV_NAMES.has(name) || seen.has(name)) continue;
     if (/[\0\r\n]/.test(value)) continue;
     seen.add(name);
-    variables.push({ name, value });
+    variables.push({ name, value, expand: expand === false ? false : true });
   }
   return variables;
 }
 
-function getPublicEnvVariables(): EnvVariable[] {
-  if (!fs.existsSync(PUBLIC_ENV_PATH)) return [];
+function readPublicEnvConfig(): PublicEnvConfig | null {
+  if (!fs.existsSync(PUBLIC_ENV_PATH)) return null;
   try {
-    return normalizeStoredPublicEnvVariables(JSON.parse(fs.readFileSync(PUBLIC_ENV_PATH, "utf8")) as unknown);
+    const raw = JSON.parse(fs.readFileSync(PUBLIC_ENV_PATH, "utf8")) as unknown;
+    const variables = normalizeStoredPublicEnvVariables(raw);
+    const text = raw && typeof raw === "object" && typeof (raw as PublicEnvConfig).text === "string"
+      ? (raw as PublicEnvConfig).text
+      : publicEnvToText(variables);
+    return { variables, text };
   } catch {
-    return [];
+    return null;
   }
+}
+
+function getPublicEnvConfig(): PublicEnvConfig {
+  const saved = readPublicEnvConfig();
+  if (saved && (saved.text?.trim() || saved.variables.length > 0)) return saved;
+  return {
+    variables: parsePublicEnvText(PUBLIC_ENV_PRESET_TEMPLATE),
+    text: PUBLIC_ENV_PRESET_TEMPLATE
+  };
+}
+
+function getPublicEnvVariables(): EnvVariable[] {
+  return getPublicEnvConfig().variables;
+}
+
+function expandEnvReferences(value: string, env: NodeJS.ProcessEnv): string {
+  return value.replace(/\$(\$|[A-Za-z_][A-Za-z0-9_]*|\{([A-Za-z_][A-Za-z0-9_]*)\})/g, (
+    _match,
+    token: string,
+    bracedName: string | undefined
+  ) => {
+    if (token === "$") return "$";
+    const name = bracedName || token;
+    return env[name] || "";
+  });
 }
 
 function getPublicEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
+  const expansionScope: NodeJS.ProcessEnv = { ...process.env };
+
   for (const variable of getPublicEnvVariables()) {
-    env[variable.name] = variable.value;
+    const value = variable.expand === false
+      ? variable.value
+      : expandEnvReferences(variable.value, expansionScope);
+    env[variable.name] = value;
+    expansionScope[variable.name] = value;
   }
   return env;
 }
 
-function savePublicEnvVariables(variables: EnvVariable[]): void {
-  fs.writeFileSync(PUBLIC_ENV_PATH, JSON.stringify({ variables }, null, 2));
+function savePublicEnvConfig(text: string, variables: EnvVariable[]): void {
+  fs.writeFileSync(PUBLIC_ENV_PATH, JSON.stringify({ text, variables }, null, 2));
 }
 
 function hasPublicClaudeDefaults(): boolean {
@@ -371,6 +462,10 @@ app.use(express.static(path.join(__dirname, "..", "public"), {
   etag: true,
   immutable: true,
   setHeaders: (res, filePath) => {
+    if (filePath.endsWith("index.html") || filePath.endsWith("style.css") || filePath.endsWith("client.js")) {
+      res.setHeader("Cache-Control", "no-cache");
+      return;
+    }
     if (filePath.endsWith(".woff2")) {
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     }
@@ -543,8 +638,14 @@ app.post("/api/claude-config", requireAuth, express.json(), (req: AuthenticatedR
 
 // ── public environment variable endpoints ──
 app.get("/api/public-env", requireAuth, requireAdmin, (_req: AuthenticatedRequest, res: express.Response) => {
-  const variables = getPublicEnvVariables();
-  res.json({ variables, text: publicEnvToText(variables) });
+  const cfg = getPublicEnvConfig();
+  const isPreset = cfg.text === PUBLIC_ENV_PRESET_TEMPLATE;
+  res.json({
+    variables: cfg.variables,
+    text: cfg.text || "",
+    presetText: PUBLIC_ENV_PRESET_TEMPLATE,
+    isPreset
+  });
 });
 
 app.post("/api/public-env", requireAuth, requireAdmin, express.json(), (req: AuthenticatedRequest, res: express.Response) => {
@@ -556,8 +657,8 @@ app.post("/api/public-env", requireAuth, requireAdmin, express.json(), (req: Aut
 
   try {
     const variables = parsePublicEnvText(text);
-    savePublicEnvVariables(variables);
-    res.json({ ok: true, variables, text: publicEnvToText(variables) });
+    savePublicEnvConfig(text, variables);
+    res.json({ ok: true, variables, text });
   } catch (err: unknown) {
     const status = err instanceof PublicEnvValidationError ? 400 : 500;
     res.status(status).json({ error: (err as Error).message || "Failed to save public environment" });

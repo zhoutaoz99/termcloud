@@ -110,7 +110,16 @@ select:focus-visible {
 }
 
 #public-env-box {
-  width: min(560px, calc(100vw - 32px));
+  width: fit-content;
+  min-width: min(420px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  overflow: visible;
+}
+
+#public-env-form {
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
 }
 
 .dialog-kicker {
@@ -173,8 +182,14 @@ select:focus-visible {
 }
 
 #public-env-box textarea {
+  display: block;
+  width: min(600px, calc(100vw - 88px));
   min-height: 260px;
-  resize: vertical;
+  min-width: min(320px, calc(100vw - 88px));
+  max-width: calc(100vw - 88px);
+  margin: 0 auto 15px;
+  resize: both;
+  overflow: auto;
   line-height: 1.45;
 }
 

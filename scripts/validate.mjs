@@ -37,6 +37,9 @@ assert(client.includes('allowProposedApi: true'), 'client main.ts must set allow
 assert(client.includes('binaryType = "arraybuffer"'), 'client main.ts must use binary WebSocket protocol');
 assert(client.includes('MSG_OUTPUT'), 'client main.ts must define binary protocol constants');
 assert(client.includes('public-env-btn'), 'client main.ts must expose admin public environment controls');
+assert(css.includes('width: fit-content'), 'style.css must let public environment dialog grow with the textarea');
+assert(css.includes('#public-env-form'), 'style.css must center the public environment form layout');
+assert(css.includes('resize: both'), 'style.css must allow public environment textarea horizontal and vertical resizing');
 
 // CSS checks
 assert(css.includes('font-variant-ligatures: none'), 'style.css must disable terminal font ligatures');
@@ -60,12 +63,15 @@ assert(server.includes('createTerminalEnv'), 'server.ts must normalize terminal 
 assert(server.includes('app.get("/api/public-env"'), 'server.ts must expose public environment read endpoint');
 assert(server.includes('app.post("/api/public-env"'), 'server.ts must expose public environment write endpoint');
 assert(server.includes('requireAdmin'), 'server.ts must protect public environment endpoints with admin auth');
+assert(server.includes('ANTHROPIC_AUTH_TOKEN="$POE_API_KEY"'), 'server.ts must provide Poe public environment preset');
 assert(server.includes('...getPublicEnv()'), 'server.ts must merge public environment into terminal sessions');
 assert(server.includes('LC_CTYPE'), 'server.ts must set UTF-8 character width locale for the pty');
 assert(!server.includes('writeFileSync(CONFIG_PATH'), 'server.ts must not rewrite config.json');
 assert(!server.includes('config.jwtSecret'), 'server.ts must not read jwtSecret from config.json');
 assert(server.includes('perMessageDeflate'), 'server.ts must enable WebSocket compression');
 assert(server.includes('compression()'), 'server.ts must enable HTTP compression middleware');
+assert(server.includes('filePath.endsWith("style.css")'), 'server.ts must avoid immutable cache for app CSS');
+assert(server.includes('filePath.endsWith("client.js")'), 'server.ts must avoid immutable cache for app JS');
 assert(server.includes('class RingBuffer'), 'server.ts must implement ring buffer');
 assert(server.includes('setInterval'), 'server.ts must implement batch flush timer');
 assert(server.includes('fs.promises'), 'server.ts must use async fs operations');

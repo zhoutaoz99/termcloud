@@ -99,7 +99,13 @@ http://<server-ip>:3000
 }
 ```
 
-用户名为 `admin` 的账号会获得管理员入口，可配置公共环境变量。公共变量保存到数据目录的 `public_env.json`，格式按 `KEY=VALUE` 逐行输入；用户自己的 Claude Code 配置会覆盖同名公共默认值。
+用户名为 `admin` 的账号会获得管理员入口，可配置公共环境变量。公共变量保存到数据目录的 `public_env.json`，支持 `export KEY="VALUE"`、行尾注释和 `$POE_API_KEY` 这类环境变量引用；用户自己的 Claude Code 配置会覆盖同名公共默认值。首次打开时会直接基于默认预设编辑，保存后写入公共配置。默认预设模板为：
+
+```bash
+export ANTHROPIC_BASE_URL="https://api.poe.com"
+export ANTHROPIC_AUTH_TOKEN="$POE_API_KEY"
+export ANTHROPIC_API_KEY="" # Important: Must be explicitly empty
+```
 
 ### 环境变量
 
